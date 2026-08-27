@@ -1383,18 +1383,18 @@ fn bt_set(root: &mut serde_json::Value, path: &str, value: serde_json::Value, me
     };
     let key = segs[segs.len() - 1].to_string();
     if merge {
-        let serde_json::Value::Object(new_map) = value else {
-            return;
-        };
-        if let Some(map) = obj.get_mut(&key).and_then(|v| v.as_object_mut()) {
-            for (k, v) in new_map {
-                map.insert(k, v);
+        if let serde_json::Value::Object(new_map) = value {
+            if let Some(map) = obj.get_mut(&key).and_then(|v| v.as_object_mut()) {
+                for (k, v) in new_map {
+                    map.insert(k, v);
+                }
+                return;
             }
+            // 目标不存在时退化为直接写入原对象（如 content → metadata.content 新建嵌套）
+            obj.insert(key, serde_json::Value::Object(new_map));
             return;
         }
-        // 目标不存在时退化为直接写入原对象（如 content → metadata.content 新建嵌套）
-        obj.insert(key, serde_json::Value::Object(new_map));
-        return;
+        // 源值非对象（数组/标量）：合并语义不适用，直接写入，避免 move 嵌套路径时静默丢值（如 ratio → metadata.ratio）
     }
     obj.insert(key, value);
 }
