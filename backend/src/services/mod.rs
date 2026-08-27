@@ -16,7 +16,7 @@ pub mod runtime_info;
 pub mod sms;
 pub mod tos;
 pub mod upstream_rate_sync;
-#[cfg(feature = "commercial_plugins")]
+// 上游素材透传客户端：ark_asset_proxy uar: 分支与 asset_convert 依赖，不再受商业 feature 门控
 pub mod upstream_asset_client;
 #[cfg(feature = "commercial_plugins")]
 pub mod volc_ark_monitor;

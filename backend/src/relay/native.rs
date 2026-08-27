@@ -23,7 +23,6 @@ use axum::{
     Json,
 };
 use std::collections::HashMap;
-#[cfg(feature = "commercial_plugins")]
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -411,7 +410,7 @@ const ARK_ASSET_ACTIONS: &[&str] = &[
     "DeleteAssetGroup",
 ];
 
-#[cfg(feature = "commercial_plugins")]
+// 以下隔离辅助函数为纯 DB/JSON 逻辑，同时服务于商业分支与 uar: 透传分支，解除门控（逻辑零改动）
 /// 加载当前用户在本插件命名空间下拥有的 Ark 资源 ID 集合
 async fn load_owned_ark_ids(
     state: &AppState,
@@ -434,7 +433,6 @@ async fn load_owned_ark_ids(
     rows.into_iter().map(|(id,)| id).collect()
 }
 
-#[cfg(feature = "commercial_plugins")]
 /// 将 List 请求的 Filter.GroupIds 收窄为当前用户拥有的组（与已有 GroupIds 取交集）
 fn narrow_list_filter_group_ids(body: &mut serde_json::Value, owned_groups: &HashSet<String>) {
     if owned_groups.is_empty() {
@@ -464,7 +462,6 @@ fn narrow_list_filter_group_ids(body: &mut serde_json::Value, owned_groups: &Has
     fobj.insert("GroupIds".to_string(), serde_json::Value::Array(narrowed));
 }
 
-#[cfg(feature = "commercial_plugins")]
 /// 过滤 Ark List 响应：仅保留 Id 属于 owned 的条目，并校正 TotalCount
 fn filter_ark_list_result(res: &mut serde_json::Value, owned: &HashSet<String>, owned_total: i64) {
     let Some(result) = res.get_mut("Result") else {
@@ -485,7 +482,6 @@ fn filter_ark_list_result(res: &mut serde_json::Value, owned: &HashSet<String>, 
     }
 }
 
-#[cfg(feature = "commercial_plugins")]
 /// 构造空的 List 成功响应（用户无本地归属时短路，避免泄露全量）
 fn empty_ark_list_response(action: &str, version: &str, region: &str) -> Response {
     let body = serde_json::json!({
@@ -506,7 +502,6 @@ fn empty_ark_list_response(action: &str, version: &str, region: &str) -> Respons
         .unwrap()
 }
 
-#[cfg(feature = "commercial_plugins")]
 /// 校验资源归属；无任何本地记录时补录当前用户（兼容历史 API 数据）
 async fn ensure_ark_owned_or_claim(
     state: &AppState,
@@ -567,6 +562,17 @@ pub async fn ark_asset_proxy(
     Query(params): Query<HashMap<String, String>>,
     Json(mut body): Json<serde_json::Value>,
 ) -> AppResult<Response> {
+    // ns=uar:<绑定ID>：上游渠道素材接口透传分支（Bearer 透传，不依赖商业 feature）；
+    // 其余 ns（asset_manager 等）仍走下方原有火山 AK/SK 签名分支，行为不变
+    if let Some(rest) = params.get("ns").and_then(|s| s.strip_prefix("uar:")) {
+        let Some(binding_id) = rest.parse::<i64>().ok().filter(|id| *id > 0) else {
+            return Err(AppError::BadRequest(format!(
+                "无效的上游素材绑定 ns: uar:{}",
+                rest
+            )));
+        };
+        return ark_asset_upstream_passthrough(&state, &token, &params, body, binding_id).await;
+    }
     #[cfg(feature = "commercial_plugins")]
     {
         // 1. 获取 Action (兼容 Action/action 和 Version/version)
@@ -901,6 +907,304 @@ pub async fn ark_asset_proxy(
         let _ = body;
         Err(AppError::Forbidden("素材资产管理插件未安装".to_string()))
     }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  ark_asset_proxy 透传分支：ns=uar:<绑定ID>
+//  Bearer 透传到上游渠道素材接口（协议与火山官方 Assets API 一致），
+//  不使用火山 AK/SK 签名；凭证从 upstream_asset_bindings + channel_configs
+//  实时读库，换上游只需改库，无需重启。用户隔离/归属/日志复用现有体系。
+// ═══════════════════════════════════════════════════════════════
+
+/// 上游透传分支：经 upstream_asset_client Bearer 转发，复用现有用户隔离与归属记录体系。
+/// 命名空间为 `uar:{绑定ID}`，与 asset_convert 的绑定隔离机制一致。
+async fn ark_asset_upstream_passthrough(
+    state: &Arc<AppState>,
+    token: &ApiToken,
+    params: &HashMap<String, String>,
+    mut body: serde_json::Value,
+    binding_id: i64,
+) -> AppResult<Response> {
+    use crate::services::upstream_asset_client as uac;
+
+    // 1. 获取 Action/Version（兼容 Action/action 和 Version/version）
+    let action = params
+        .get("Action")
+        .or_else(|| params.get("action"))
+        .cloned()
+        .unwrap_or_default();
+    let version = params
+        .get("Version")
+        .or_else(|| params.get("version"))
+        .cloned()
+        .unwrap_or_else(|| "2024-01-01".to_string());
+    let plugin_ns = uac::binding_ns(binding_id);
+
+    // 2. 白名单检查（与火山签名分支同一份白名单）
+    if !ARK_ASSET_ACTIONS.contains(&action.as_str()) {
+        return Err(AppError::BadRequest(format!(
+            "Unsupported Ark Asset Action: {}",
+            action
+        )));
+    }
+
+    // 3. 用户及插件等级权限检查（以 upstream_asset_relay 插件为闸门）
+    let user: crate::models::User = sqlx::query_as(&state.db.format_query("SELECT u.*, ul.name as level_name, ul.id as level_id FROM users u LEFT JOIN user_levels ul ON u.user_group = ul.group_key WHERE u.id = ?"))
+        .bind(&token.user_id)
+        .fetch_optional(&state.db.pool)
+        .await?
+        .ok_or_else(|| AppError::Unauthorized)?;
+
+    if user.role != "admin" {
+        let plugin_info: Option<(i64, String)> = sqlx::query_as(&state.db.format_query(
+            "SELECT is_enabled, allowed_levels FROM plugins WHERE name = ? AND is_enabled = 1",
+        ))
+        .bind(uac::PLUGIN_NAME)
+        .fetch_optional(&state.db.pool)
+        .await?;
+
+        let Some((_, allowed_levels)) = plugin_info else {
+            return Err(AppError::Forbidden(
+                "上游素材透传插件(upstream_asset_relay)未安装或未启用".to_string(),
+            ));
+        };
+        if allowed_levels != "all" {
+            let allowed: Vec<&str> = allowed_levels.split(',').collect();
+            let level_id_str = user.level_id.unwrap_or(0).to_string();
+            if !allowed.contains(&user.user_group.as_str())
+                && !allowed.contains(&level_id_str.as_str())
+            {
+                return Err(AppError::Forbidden(
+                    "您当前的用户等级无权使用上游素材透传功能".to_string(),
+                ));
+            }
+        }
+    }
+
+    // 4. 加载绑定凭证（upstream_asset_bindings JOIN channel_configs，实时读库）
+    let creds = uac::load_binding_endpoints(&state.db, &[binding_id]).await;
+    let Some((endpoint_base, api_key)) = creds.get(&binding_id).cloned() else {
+        return Err(AppError::BadRequest(format!(
+            "上游素材绑定#{} 不存在或渠道凭证不可用（渠道未启用/缺少 base_url 或 api_key）",
+            binding_id
+        )));
+    };
+
+    // 请求体预处理：Name 长度限制（与火山官方约束一致）；
+    // 透传模式不强制注入 ProjectName（无系统火山配置项），由用户按官方文档自传，其余字段原样透传
+    if let Some(obj) = body.as_object_mut() {
+        if let Some(serde_json::Value::String(n)) = obj.get_mut("Name") {
+            match action.as_str() {
+                "CreateAsset" | "UpdateAsset" => {
+                    *n = crate::services::volcengine::clamp_create_asset_name(n);
+                }
+                "CreateAssetGroup" | "UpdateAssetGroup" => {
+                    *n = crate::services::volcengine::clamp_ark_name(n);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // 预提取请求体关键字段（body 将在转发时被消费，需提前保存）
+    let body_id = body
+        .get("Id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let body_group_id = body
+        .get("GroupId")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let body_asset_type = body
+        .get("AssetType")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_lowercase());
+    let body_url = body
+        .get("URL")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let body_name = body
+        .get("Name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let body_desc = body
+        .get("Description")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    // 5. 用户归属校验 + List 预过滤准备（admin 跳过隔离）
+    let mut list_owned_ids: Option<HashSet<String>> = None;
+    let mut list_owned_total: i64 = 0;
+    if user.role != "admin" {
+        match action.as_str() {
+            "GetAsset" | "UpdateAsset" | "DeleteAsset" => {
+                let id = body_id
+                    .as_deref()
+                    .ok_or_else(|| AppError::BadRequest("缺少必需参数 Id".into()))?;
+                ensure_ark_owned_or_claim(state, "asset", id, &token.user_id, &plugin_ns).await?;
+            }
+            "GetAssetGroup" | "UpdateAssetGroup" | "DeleteAssetGroup" => {
+                let id = body_id
+                    .as_deref()
+                    .ok_or_else(|| AppError::BadRequest("缺少必需参数 Id".into()))?;
+                ensure_ark_owned_or_claim(state, "group", id, &token.user_id, &plugin_ns)
+                    .await?;
+            }
+            "CreateAsset" => {
+                // 只能写入自己拥有的素材组
+                let gid = body_group_id
+                    .as_deref()
+                    .ok_or_else(|| AppError::BadRequest("缺少必需参数 GroupId".into()))?;
+                ensure_ark_owned_or_claim(state, "group", gid, &token.user_id, &plugin_ns)
+                    .await?;
+            }
+            "ListAssets" => {
+                let owned_assets = load_owned_ark_ids(
+                    state,
+                    "plugin_assets",
+                    "asset_id",
+                    &token.user_id,
+                    &plugin_ns,
+                )
+                .await;
+                if owned_assets.is_empty() {
+                    return Ok(empty_ark_list_response(&action, &version, "cn-north-1"));
+                }
+                let owned_groups = load_owned_ark_ids(
+                    state,
+                    "plugin_asset_groups",
+                    "group_id",
+                    &token.user_id,
+                    &plugin_ns,
+                )
+                .await;
+                narrow_list_filter_group_ids(&mut body, &owned_groups);
+                list_owned_total = owned_assets.len() as i64;
+                list_owned_ids = Some(owned_assets);
+            }
+            "ListAssetGroups" => {
+                let owned_groups = load_owned_ark_ids(
+                    state,
+                    "plugin_asset_groups",
+                    "group_id",
+                    &token.user_id,
+                    &plugin_ns,
+                )
+                .await;
+                if owned_groups.is_empty() {
+                    return Ok(empty_ark_list_response(&action, &version, "cn-north-1"));
+                }
+                list_owned_total = owned_groups.len() as i64;
+                list_owned_ids = Some(owned_groups);
+            }
+            _ => {}
+        }
+    }
+
+    // 6. Bearer 透传转发（Action/Version 查询参数 + JSON body，与火山官方协议一致，带完整日志）
+    let ctx = uac::UpstreamCallCtx {
+        http: &state.http_client,
+        db: &state.db,
+        user_id: &token.user_id,
+        plugin_name: &plugin_ns,
+        endpoint_base: &endpoint_base,
+        api_key: &api_key,
+    };
+    let mut res = match uac::call_action_logged(&ctx, &action, &body).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(
+                "[ArkAssetPassthrough] {} 失败 绑定#{}: {}",
+                action,
+                binding_id,
+                e
+            );
+            return Err(AppError::UpstreamError(e.to_string()));
+        }
+    };
+
+    // List：按本地归属过滤，防止泄露他人素材（与火山签名分支同策略）
+    if let Some(ref owned) = list_owned_ids {
+        filter_ark_list_result(&mut res, owned, list_owned_total);
+    }
+
+    let res_bytes = serde_json::to_vec(&res).unwrap_or_default();
+
+    // 后置处理：Create 写入本地归属记录 / Delete 清理本地记录（异步不阻塞响应）
+    match action.as_str() {
+        "CreateAsset" => {
+            if let Some(aid) = res.pointer("/Result/Id").and_then(|v| v.as_str()) {
+                let s = state.clone();
+                let uid = token.user_id.clone();
+                let aid = aid.to_string();
+                let at = body_asset_type.unwrap_or_else(|| "image".to_string());
+                let url = body_url.unwrap_or_default();
+                let ns = plugin_ns.clone();
+                tokio::spawn(async move {
+                    let fname = url.rsplit('/').next().unwrap_or("unknown").to_string();
+                    let _ = sqlx::query(&s.db.format_query(
+                        "INSERT INTO plugin_assets (user_id, asset_type, source, status, file_name, file_url, asset_id, category, plugin_ns) \
+                         VALUES (?, ?, 'api_proxy', 'approved', ?, ?, ?, 'API素材', ?)"
+                    ))
+                    .bind(&uid).bind(&at).bind(&fname).bind(&url).bind(&aid).bind(&ns)
+                    .execute(&s.db.pool).await;
+                });
+            }
+        }
+        "CreateAssetGroup" => {
+            if let Some(gid) = res.pointer("/Result/Id").and_then(|v| v.as_str()) {
+                let s = state.clone();
+                let uid = token.user_id.clone();
+                let gid = gid.to_string();
+                let name = body_name.unwrap_or_else(|| "未命名".to_string());
+                let desc = body_desc;
+                let ns = plugin_ns.clone();
+                tokio::spawn(async move {
+                    let _ = sqlx::query(&s.db.format_query(
+                        "INSERT INTO plugin_asset_groups (user_id, group_id, name, description, plugin_ns) VALUES (?, ?, ?, ?, ?)"
+                    ))
+                    .bind(&uid).bind(&gid).bind(&name).bind(&desc).bind(&ns)
+                    .execute(&s.db.pool).await;
+                });
+            }
+        }
+        "DeleteAsset" => {
+            if let Some(ref id) = body_id {
+                let s = state.clone();
+                let id = id.clone();
+                let uid = token.user_id.clone();
+                let ns = plugin_ns.clone();
+                tokio::spawn(async move {
+                    let _ = sqlx::query(&s.db.format_query(
+                        "DELETE FROM plugin_assets WHERE asset_id = ? AND user_id = ? AND plugin_ns = ? AND source = 'api_proxy'"
+                    ))
+                    .bind(&id).bind(&uid).bind(&ns)
+                    .execute(&s.db.pool).await;
+                });
+            }
+        }
+        "DeleteAssetGroup" => {
+            if let Some(ref id) = body_id {
+                let s = state.clone();
+                let id = id.clone();
+                let uid = token.user_id.clone();
+                let ns = plugin_ns.clone();
+                tokio::spawn(async move {
+                    let _ = sqlx::query(&s.db.format_query(
+                        "DELETE FROM plugin_asset_groups WHERE group_id = ? AND user_id = ? AND plugin_ns = ?"
+                    ))
+                    .bind(&id).bind(&uid).bind(&ns)
+                    .execute(&s.db.pool).await;
+                });
+            }
+        }
+        _ => {}
+    }
+
+    Ok(Response::builder()
+        .header("Content-Type", "application/json")
+        .body(axum::body::Body::from(res_bytes))
+        .unwrap())
 }
 
 // ═══════════════════════════════════════════════════════════════

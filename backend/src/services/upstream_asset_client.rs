@@ -142,7 +142,8 @@ struct BindingCredRow {
 }
 
 /// 一次查出多个绑定的 endpoint/api_key，避免按绑定 N 次查询。
-async fn load_binding_endpoints(
+/// 供 ark_asset_proxy uar: 透传分支复用（凭证实时读库，换上游改库即生效）。
+pub async fn load_binding_endpoints(
     db: &crate::db::Database,
     binding_ids: &[i64],
 ) -> HashMap<i64, (String, String)> {
