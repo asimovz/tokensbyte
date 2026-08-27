@@ -62,6 +62,43 @@ pub struct ResolvedForward {
     pub res_base: HashMap<String, String>,
     /// 级联：目标分辨率 → 标准版增强场景（common|ugc|short_series|aigc|old_film）；仅 standard 生效
     pub res_scene: HashMap<String, String>,
+    /// 声明式请求体转换指令（config_json.body_transform）；在 target_type 构建完成后按序执行，
+    /// 用于在不改代码的情况下适配字段名/结构/类型不一致的上游渠道；空=不转换
+    pub body_transform: Vec<BodyTransformOp>,
+}
+
+/// body_transform 声明式请求体转换指令（对应 config_json.body_transform 数组元素）。
+///
+/// 支持的操作（op）：
+/// - `rename`   : from → to 移动字段（删源），路径支持点号嵌套，如 "a.b"
+/// - `move`     : 同 rename，但目标已存在对象时执行合并而非覆盖，适合整体搬入嵌套结构（如 content → metadata.content）
+/// - `template` : 用模板字符串（`${字段名}` 引用任意点路径字段）生成字符串写入 to；
+///                remove_sources 缺省 true：合并后删除模板引用的源字段；目标已存在时不覆盖、也不删源字段，防止丢参；空引用占位符转为空串，若结果全空则不写入
+/// - `cast`     : field 字段做类型转换（to_type: "string" | "number" | "int" | "bool"），字符串数字可互转；转换失败保持原值不变；field 缺省时回退用 from（与 move 共用 from 的写法兼容）
+/// - `set`      : 无条件写入字面值 value 到 field（点路径），字段不存在时自动创建中间层；value 可为 null
+/// - `default`  : 仅当 field 不存在（或为 null）时写入 value，存在则跳过；适合给上游补默认参数；field 缺省时回退用 from
+/// - `delete`   : 删除 field 字段（点路径），支持清理嵌套字段；field 缺省时回退用 from（如 {"op":"delete","from":"resolution"}）
+///
+/// 指令按数组顺序依次执行；路径均支持点号嵌套（如 "metadata.content"），
+/// 中间层级不存在时自动创建。任意指令缺少必要字段时跳过该条，不报错。
+#[derive(Debug, Clone, Default)]
+pub struct BodyTransformOp {
+    /// 操作类型: rename / move / template / cast / set / default / delete
+    pub op: String,
+    /// 源字段路径（点分隔）；rename / move 必填；delete / cast / set / default 缺省 field 时的回退
+    pub from: Option<String>,
+    /// 目标字段路径（点分隔）；rename / move / template 必填
+    pub to: Option<String>,
+    /// 目标/操作字段路径（点分隔）；cast / set / default / delete 使用，缺省时回退 from
+    pub field: Option<String>,
+    /// 模板字符串，`${字段名}` 引用请求体字段（支持点路径）；template 必填；源字段缺失时占位符渲染为空串；模板结果全空时不写入目标，避免产出空值参数导致上游报错；目标已存在时不覆盖，保证不丢参（如需强制覆盖可先 delete 再 template）
+    pub template: Option<String>,
+    /// 字面值；set / default 使用；可为任意 JSON 类型（含 null，此时写入 JSON null 字面值）；以 `value` 键是否存在判断（区分"值为 null"和"未提供 value"）
+    pub value: Option<serde_json::Value>,
+    /// 转换目标类型: "string" / "number" / "int" / "bool"；cast 必填；"int" 与 "number" 语义一致（先整数后浮点解析）
+    pub to_type: Option<String>,
+    /// template 专用：合并后是否删除模板引用的源字段；缺省 true（显式 false 可保留源字段）
+    pub remove_sources: Option<bool>,
 }
 
 impl Default for ResolvedForward {
@@ -89,6 +126,7 @@ impl Default for ResolvedForward {
             res_enhance: HashMap::new(),
             res_base: HashMap::new(),
             res_scene: HashMap::new(),
+            body_transform: Vec::new(),
         }
     }
 }
@@ -1287,7 +1325,230 @@ pub async fn transform_request_body(
         apply_content_to_prompt(&mut result);
     }
 
+    // 声明式请求体转换（转发规则 config_json.body_transform）：所有内置构建/后处理完成后的最后一道精修，
+    // 字段重命名/嵌套搬运/模板拼接/类型转换等均在此按序执行，无需为每个上游硬编码
+    if !resolved.body_transform.is_empty() {
+        apply_body_transform(&resolved.body_transform, &mut result);
+    }
+
     result
+}
+
+// ── 声明式请求体转换（body_transform）─────────────────────
+
+/// 按点路径（如 "metadata.content"）读取值；任一层级缺失返回 None
+fn bt_get<'a>(root: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+    let mut cur = root;
+    for seg in path.split('.').filter(|s| !s.is_empty()) {
+        cur = cur.get(seg)?;
+    }
+    Some(cur)
+}
+
+/// 按点路径取出并删除值；路径不存在返回 None
+fn bt_take(root: &mut serde_json::Value, path: &str) -> Option<serde_json::Value> {
+    let segs: Vec<&str> = path.split('.').filter(|s| !s.is_empty()).collect();
+    if segs.is_empty() {
+        return None;
+    }
+    let mut cur = root;
+    for seg in &segs[..segs.len() - 1] {
+        cur = cur.get_mut(seg)?;
+    }
+    cur.as_object_mut()?.remove(segs[segs.len() - 1])
+}
+
+/// 按点路径写入值，中间层级自动创建（非对象层级会被重建为空对象）；
+/// merge=true 且目标为已存在对象时合并同级字段，否则覆盖。非对象根直接返回，不修改原值。
+fn bt_set(root: &mut serde_json::Value, path: &str, value: serde_json::Value, merge: bool) {
+    let segs: Vec<&str> = path.split('.').filter(|s| !s.is_empty()).collect();
+    if segs.is_empty() {
+        return;
+    }
+    let mut cur = root;
+    for seg in &segs[..segs.len() - 1] {
+        let Some(obj) = cur.as_object_mut() else {
+            return;
+        };
+        let entry = obj
+            .entry((*seg).to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        if !entry.is_object() {
+            *entry = serde_json::json!({});
+        }
+        cur = entry;
+    }
+    let Some(obj) = cur.as_object_mut() else {
+        return;
+    };
+    let key = segs[segs.len() - 1].to_string();
+    if merge {
+        let serde_json::Value::Object(new_map) = value else {
+            return;
+        };
+        if let Some(map) = obj.get_mut(&key).and_then(|v| v.as_object_mut()) {
+            for (k, v) in new_map {
+                map.insert(k, v);
+            }
+            return;
+        }
+        // 目标不存在时退化为直接写入原对象（如 content → metadata.content 新建嵌套）
+        obj.insert(key, serde_json::Value::Object(new_map));
+        return;
+    }
+    obj.insert(key, value);
+}
+
+/// JSON 值 → 模板占位符字符串：字符串原样取，数字/布尔用 to_string，
+/// 对象/数组用紧凑 JSON，null 为空串；仅用于 template 拼接展示，不用于其他类型转换（避免数字失真）
+fn bt_value_to_string(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// 按序执行 body_transform 声明式转换指令（各操作语义见 BodyTransformOp 文档）。
+/// 任意指令缺少必要字段时静默跳过该条，不阻断后续指令；请求体非 JSON 对象时直接返回。
+pub fn apply_body_transform(ops: &[BodyTransformOp], root: &mut serde_json::Value) {
+    if !root.is_object() {
+        return;
+    }
+    for op in ops {
+        match op.op.as_str() {
+            // rename/move：源字段取出后写入目标路径；move 目标已存在对象时合并，同名键会被源值覆盖；rename 直接覆盖
+            "rename" | "move" => {
+                let (Some(from), Some(to)) = (op.from.as_deref(), op.to.as_deref()) else {
+                    continue;
+                };
+                if from == to {
+                    continue;
+                }
+                if let Some(v) = bt_take(root, from) {
+                    bt_set(root, to, v, op.op == "move");
+                }
+            }
+            // template：${字段} 占位符拼接写入目标；目标已有非 null 值时不覆盖也不删源；
+            // 所有引用均为空/缺失时不写入，避免产出空值参数导致上游报错；源字段删除可用 remove_sources: false 关闭
+            "template" => {
+                let (Some(to), Some(tpl)) = (op.to.as_deref(), op.template.as_deref()) else {
+                    continue;
+                };
+                if bt_get(root, to).map(|v| !v.is_null()).unwrap_or(false) {
+                    continue;
+                }
+                let mut out = String::new();
+                let mut refs: Vec<String> = Vec::new();
+                let mut any_value = false;
+                let mut rest = tpl;
+                while let Some(start) = rest.find("${") {
+                    out.push_str(&rest[..start]);
+                    let after = &rest[start + 2..];
+                    match after.find('}') {
+                        Some(end) => {
+                            let name = &after[..end];
+                            if let Some(v) = bt_get(root, name) {
+                                if !v.is_null() {
+                                    any_value = true;
+                                }
+                                out.push_str(&bt_value_to_string(v));
+                            }
+                            refs.push(name.to_string());
+                            rest = &after[end + 1..];
+                        }
+                        None => {
+                            // 未闭合的占位符按字面量原样保留，不终止处理（防止一个格式错误的指令丢弃整个模板）
+                            out.push_str("${");
+                            rest = after;
+                        }
+                    }
+                }
+                out.push_str(rest);
+                if !any_value {
+                    continue;
+                }
+                bt_set(root, to, serde_json::json!(out), false);
+                if op.remove_sources.unwrap_or(true) {
+                    for name in refs {
+                        bt_take(root, &name);
+                    }
+                }
+            }
+            // cast：类型转换，失败时保留原值（先 take 再 set，转换失败时原值写回不丢失）
+            "cast" => {
+                let Some(field) = op.field.as_deref().or(op.from.as_deref()) else {
+                    continue;
+                };
+                let Some(to_type) = op.to_type.as_deref() else {
+                    continue;
+                };
+                let Some(v) = bt_take(root, field) else {
+                    continue;
+                };
+                let casted = match to_type {
+                    "string" => serde_json::json!(bt_value_to_string(&v)),
+                    "int" | "number" => {
+                        if v.is_number() {
+                            v
+                        } else if let Some(s) = v.as_str() {
+                            let s = s.trim();
+                            if let Ok(i) = s.parse::<i64>() {
+                                serde_json::json!(i)
+                            } else if let Ok(f) = s.parse::<f64>() {
+                                serde_json::json!(f)
+                            } else {
+                                v
+                            }
+                        } else if let Some(b) = v.as_bool() {
+                            serde_json::json!(if b { 1 } else { 0 })
+                        } else {
+                            v
+                        }
+                    }
+                    "bool" => match &v {
+                        serde_json::Value::Bool(_) => v,
+                        serde_json::Value::String(s) => serde_json::json!(matches!(
+                            s.trim().to_lowercase().as_str(),
+                            "true" | "1" | "yes"
+                        )),
+                        serde_json::Value::Number(n) => {
+                            serde_json::json!(n.as_f64().map(|f| f != 0.0).unwrap_or(false))
+                        }
+                        _ => v,
+                    },
+                    _ => v,
+                };
+                bt_set(root, field, casted, false);
+            }
+            // set：无条件写入；default：仅当字段不存在或为 null 时写入（给上游补默认参数）
+            "set" | "default" => {
+                let Some(field) = op.field.as_deref().or(op.from.as_deref()) else {
+                    continue;
+                };
+                let Some(value) = op.value.clone() else {
+                    continue;
+                };
+                if op.op == "default"
+                    && bt_get(root, field).map(|v| !v.is_null()).unwrap_or(false)
+                {
+                    continue;
+                }
+                bt_set(root, field, value, false);
+            }
+            // delete：删除字段（支持嵌套路径）；不存在时静默跳过；field 缺省回退 from，兼容 {"op":"delete","from":"x"} 写法；同时兼容 delete 误配 to 字段（忽略）
+            "delete" => {
+                let Some(field) = op.field.as_deref().or(op.from.as_deref()) else {
+                    continue;
+                };
+                bt_take(root, field);
+            }
+            // 未知 op 静默跳过（向前兼容：旧版后端遇到新指令不报错）
+            _ => {}
+        }
+    }
 }
 
 /// 将 OpenAI 风格的 `web_search: true` 转换为目标平台的联网搜索参数。
@@ -1547,7 +1808,50 @@ pub fn parse_forward_config(
         res_enhance: parse_res_str_map(config, "res_enhance"),
         res_base: parse_res_str_map(config, "res_base"),
         res_scene: parse_res_str_map(config, "res_scene"),
+        body_transform: parse_body_transform(config),
     }
+}
+
+/// 解析 config_json.body_transform 声明式转换指令数组。
+/// 非法条目（非对象/无 op）直接丢弃，不阻断其它指令。
+fn parse_body_transform(config: &serde_json::Value) -> Vec<BodyTransformOp> {
+    let Some(arr) = config.get("body_transform").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter_map(|item| {
+            let op = item.get("op").and_then(|v| v.as_str()).unwrap_or("");
+            if op.is_empty() {
+                return None;
+            }
+            Some(BodyTransformOp {
+                op: op.to_string(),
+                from: item
+                    .get("from")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+                to: item
+                    .get("to")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+                field: item
+                    .get("field")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+                template: item.get("template").and_then(|v| v.as_str()).map(str::to_string),
+                value: item.get("value").cloned(),
+                to_type: item
+                    .get("to_type")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+                remove_sources: item.get("remove_sources").and_then(|v| v.as_bool()),
+            })
+        })
+        .collect()
 }
 
 // ── 域名智能推断（无转发规则时的自动识别）─────────────────────
