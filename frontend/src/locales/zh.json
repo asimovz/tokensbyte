@@ -92,6 +92,7 @@
     "system_about": "系统关于",
     "channel_groups": "模型渠道分组",
     "channel_configs": "上游渠道配置",
+        "asset_bindings": "上游素材绑定",
     "model_marketplace": "模型广场",
     "announcements": "提示通知",
     "login": "登录",

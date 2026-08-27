@@ -556,6 +556,116 @@ async fn ensure_ark_owned_or_claim(
     Ok(())
 }
 
+/// 默认透传路由：按「用户分组→渠道优先级→上游渠道→绑定」解析素材透传绑定。
+/// 渠道分组匹配语义与 select_channel 一致（user_groups 含分组/等级，或 '[]' 表示全部分组）；
+/// 命中渠道的 preset 若尚无绑定则自动创建（素材路径留空），使终端用户可完全按火山官方文档调用。
+async fn resolve_default_asset_binding(state: &AppState, user_id: &str) -> Option<i64> {
+    #[derive(sqlx::FromRow)]
+    struct UserGroupRow {
+        user_group: String,
+        level_id: Option<i64>,
+    }
+    let Ok(ug) = sqlx::query_as::<_, UserGroupRow>(
+        &state.db.format_query(
+            "SELECT u.user_group, ul.id AS level_id FROM users u \
+             LEFT JOIN user_levels ul ON u.user_group = ul.group_key WHERE u.id = ?",
+        ),
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db.pool)
+    .await
+    else {
+        return None;
+    };
+    let Some(ug) = ug else {
+        return None;
+    };
+
+    #[derive(sqlx::FromRow)]
+    struct PresetRow {
+        preset_id: Option<i64>,
+        name: String,
+    }
+    // 分组→优先级：选渠语义与 router::select_channel 的 user_groups LIKE 匹配保持一致
+    // 先把格式化后的 SQL 绑到局部变量，避免 format_query 返回的临时 String 被 query_as 借用后提前释放（E0716）
+    let preset_sql = state.db.format_query(
+        "SELECT preset_id, name FROM channels \
+         WHERE status = 1 AND preset_id IS NOT NULL \
+         AND (user_groups LIKE ? OR user_groups LIKE ? OR user_groups = '[]') \
+         ORDER BY priority DESC, id",
+    );
+    let mut q = sqlx::query_as::<_, PresetRow>(&preset_sql);
+    q = q.bind(format!("%\"{}\"%", ug.user_group));
+    q = q.bind(format!("%\"{}\"%", ug.level_id.unwrap_or_default()));
+    let candidates = q.fetch_all(&state.db.pool).await.unwrap_or_default();
+
+    // 按优先级依次找绑定；首个无绑定的 preset 自动创建（素材路径留空 = 根路径收 ?Action=）
+    let mut first_no_binding: Option<&PresetRow> = None;
+    for row in &candidates {
+        let Some(pid) = row.preset_id else { continue };
+        let found: Option<i64> = sqlx::query_scalar(&state.db.format_query(
+            "SELECT id FROM upstream_asset_bindings WHERE channel_config_id = ? AND is_active = 1 ORDER BY id LIMIT 1",
+        ))
+        .bind(pid)
+        .fetch_optional(&state.db.pool)
+        .await
+        .unwrap_or(None);
+        if let Some(bid) = found {
+            tracing::info!(
+                "[UarDefault] 默认路由命中 用户={} 分组={} 渠道#{} 绑定#{}",
+                user_id,
+                ug.user_group,
+                pid,
+                bid
+            );
+            return Some(bid);
+        }
+        if first_no_binding.is_none() {
+            first_no_binding = Some(row);
+        }
+    }
+
+    if let Some(row) = first_no_binding {
+        if let Some(pid) = row.preset_id {
+            let name = format!("{}-素材透传", row.name);
+            match sqlx::query_scalar::<_, i64>(&state.db.format_query(
+                "INSERT INTO upstream_asset_bindings (name, channel_config_id, asset_base_path, remark) \
+                 VALUES (?, ?, '', '按用户分组默认路由自动创建') RETURNING id",
+            ))
+            .bind(&name)
+            .bind(pid)
+            .fetch_one(&state.db.pool)
+            .await
+            {
+                Ok(bid) => {
+                    tracing::info!(
+                        "[UarDefault] 自动创建绑定#{} 用户={} 分组={} 渠道#{}({})",
+                        bid,
+                        user_id,
+                        ug.user_group,
+                        pid,
+                        row.name
+                    );
+                    return Some(bid);
+                }
+                Err(e) => {
+                    tracing::warn!("[UarDefault] 自动创建绑定失败 渠道#{}: {}", pid, e);
+                }
+            }
+        }
+    }
+
+    // 兜底：分组未命中任何渠道时，取任一条启用绑定（渠道须启用）
+    sqlx::query_scalar(&state.db.format_query(
+        "SELECT b.id FROM upstream_asset_bindings b \
+         LEFT JOIN channel_configs c ON c.id = b.channel_config_id \
+         WHERE b.is_active = 1 AND COALESCE(c.status, 1) = 1 ORDER BY b.id LIMIT 1",
+    ))
+    .fetch_optional(&state.db.pool)
+    .await
+    .unwrap_or(None)
+}
+
 pub async fn ark_asset_proxy(
     State(state): State<Arc<AppState>>,
     Extension(token): Extension<ApiToken>,
@@ -563,7 +673,7 @@ pub async fn ark_asset_proxy(
     Json(mut body): Json<serde_json::Value>,
 ) -> AppResult<Response> {
     // ns=uar:<绑定ID>：上游渠道素材接口透传分支（Bearer 透传，不依赖商业 feature）；
-    // 其余 ns（asset_manager 等）仍走下方原有火山 AK/SK 签名分支，行为不变
+    // 其余情况先尝试默认透传路由，解析不到绑定才落入下方原有分支，行为向后兼容
     if let Some(rest) = params.get("ns").and_then(|s| s.strip_prefix("uar:")) {
         let Some(binding_id) = rest.parse::<i64>().ok().filter(|id| *id > 0) else {
             return Err(AppError::BadRequest(format!(
@@ -571,6 +681,11 @@ pub async fn ark_asset_proxy(
                 rest
             )));
         };
+        return ark_asset_upstream_passthrough(&state, &token, &params, body, binding_id).await;
+    }
+    // 默认透传路由：未传 ns（火山官方文档式调用）或传其他 ns 时，按用户分组→渠道优先级自动选绑定透传；
+    // 平台未配置任何素材渠道时解析为 None，回落到原有分支保持旧行为（报插件未安装）
+    if let Some(binding_id) = resolve_default_asset_binding(&state, &token.user_id).await {
         return ark_asset_upstream_passthrough(&state, &token, &params, body, binding_id).await;
     }
     #[cfg(feature = "commercial_plugins")]

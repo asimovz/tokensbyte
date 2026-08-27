@@ -480,6 +480,10 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({ isUserEnd = false }) 
           key: '/admin0755/channel-configs',
           label: <Link to="/admin0755/channel-configs">{t('menu.channel_configs')}</Link>,
         });
+        channelChildren.push({
+          key: '/admin0755/upstream-asset-bindings',
+          label: <Link to="/admin0755/upstream-asset-bindings">{t('menu.asset_bindings')}</Link>,
+        });
       }
       if (channelChildren.length > 0) {
         menuItems.push({

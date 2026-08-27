@@ -34,6 +34,7 @@ pub mod plugins;
 pub mod settings;
 pub mod task_logs;
 pub mod tokens;
+pub mod upstream_asset_bindings;
 pub mod upstreams;
 pub mod user;
 pub mod user_kyc;
@@ -98,6 +99,19 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/channel-configs/{id}/quota/reset",
             post(channel_configs::reset_quota),
+        )
+        .route(
+            "/upstream-asset-bindings",
+            post(upstream_asset_bindings::create_binding),
+        )
+        .route(
+            "/upstream-asset-bindings/{id}",
+            put(upstream_asset_bindings::update_binding)
+                .delete(upstream_asset_bindings::delete_binding),
+        )
+        .route(
+            "/upstream-asset-bindings/{id}/test",
+            post(upstream_asset_bindings::test_binding),
         )
         .route(
             "/upstreams",
@@ -284,6 +298,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/channel-configs",
             get(channel_configs::list_channel_configs),
+        )
+        .route(
+            "/upstream-asset-bindings",
+            get(upstream_asset_bindings::list_bindings),
         )
         .route("/logs", get(logs::list_logs))
         .route("/logs/export", get(logs::export_logs))
