@@ -58,3 +58,14 @@ tokensbyte-images*.tar.gz
 backend/git_log.txt
 backend/tokensbyte-server
 build_and_push_cnb.sh
+
+# 构建/部署产物（仓库治理追加）
+*.tar
+*.tar.gz
+tokensbyte-server-bin
+tokensbyte-server-debug-bin
+*.bak_*
+# 本地临时目录（未纳入版本管理）
+backend/src/patch/
+docker-deploy/
+frontend-patch/
