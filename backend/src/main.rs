@@ -19,6 +19,9 @@ mod providers;
 mod relay;
 mod services;
 mod time_system;
+//start patch @bobcat
+mod patch;
+//end patch
 
 use config::AppConfig;
 use db::Database;
@@ -99,6 +102,9 @@ async fn main() -> anyhow::Result<()> {
     let config_data = AppConfig::from_env();
     let database = Database::new(&config_data.database_url).await?;
     database.run_migrations().await?;
+    //start patch @bobcat
+    crate::patch::run_migrations(&database.pool).await?;
+    //end patch
 
     // 同步 REGISTER_ENABLED 环境变量到数据库设置
     sync_registration_settings(&database, config_data.register_enabled).await?;

@@ -37,6 +37,9 @@ pub async fn chat_completions(
     let ctx = proxy::get_user_context(&state, &token.user_id).await?;
     proxy::check_model_permission(&state, &token, model, "/v1/chat/completions", Some("聊天"))
         .await?;
+    //start patch @bobcat
+    let mut replace = crate::patch::maybe_replace(&state, &token.user_id, model, Some("聊天")).await;
+    //end patch
 
     // 【一条日志原则】HA 重试复用同一条 pending，避免产生多条
     let mut ha = crate::relay::ha::HaAttempt::begin(&state, token.high_availability).await;
@@ -45,18 +48,21 @@ pub async fn chat_completions(
         let start_time = std::time::Instant::now();
 
         // 1. 选择渠道
-        let channel = match proxy::select_channel_for_model(
+        //start patch @bobcat
+        let channel = match crate::patch::select_channel_for_replace(
             &state,
             &token,
-            model,
+            &mut replace,
             &ctx.user_group,
             &ctx.level_id,
             raw_path,
             &ha.exclude_aids,
             !ha.had_upstream,
+            ha.had_upstream,
             Some("聊天"),
         )
         .await
+        //end patch
         {
             Ok(c) => c,
             Err(e) => {
@@ -77,35 +83,42 @@ pub async fn chat_completions(
                 }
             };
 
+        //start patch @bobcat
+        let route_model = replace.route();
+        let route_db_model = replace
+            .fwd_db_model(&state, Some("聊天"), Some(&channel), db_model.as_ref())
+            .await;
+        //end patch
+
         // 模型映射：聊天无分辨率档，跳过 body 解析
         let (resolved_model, mapping_source) =
-            router::resolve_model(&channel, model, db_model.as_ref(), None);
+            router::resolve_model(&channel, route_model, route_db_model.as_ref(), None);
 
         // 3. 解析转发规则（复用 db_model 避免重查 models 表）
         let resolved = match forward::resolve_forward_rule(
             &state,
-            model,
+            route_model,
             &resolved_cat,
             raw_path,
             Some(&channel),
-            db_model.as_ref(),
+            route_db_model.as_ref(),
         )
         .await
         {
             Some(r) => r,
             None => {
-                if forward::model_has_forward_rules(&state, model).await {
+                if forward::model_has_forward_rules(&state, route_model).await {
                     // 业务侧错误，不可 HA 续试（continue 不 bump 会空转）
                     ha.on_access_err(AppError::BadRequest(format!(
                         "模型 '{}' 不支持当前接口，请检查模型对应的转发规则",
-                        model
+                        route_model
                     )));
                     break;
                 }
                 forward::infer_forward_from_base_url(
                     &channel.base_url,
                     &resolved_cat,
-                    db_model.as_ref(),
+                    route_db_model.as_ref(),
                 )
             }
         };
@@ -657,19 +670,23 @@ pub async fn responses_create(
 
     let ctx = proxy::get_user_context(&state, &token.user_id).await?;
     proxy::check_model_permission(&state, &token, model, "/v1/responses", Some("聊天")).await?;
+    //start patch @bobcat
+    let mut replace = crate::patch::maybe_replace(&state, &token.user_id, model, Some("聊天")).await;
+    //end patch
     let mut ha = crate::relay::ha::HaAttempt::begin(&state, token.high_availability).await;
 
     while ha.cont() {
         let start_time = std::time::Instant::now();
-        let channel = match proxy::select_channel_for_model(
+        let channel = match crate::patch::select_channel_for_replace(
             &state,
             &token,
-            model,
+            &mut replace,
             &ctx.user_group,
             &ctx.level_id,
             raw_path,
             &ha.exclude_aids,
             !ha.had_upstream,
+            ha.had_upstream,
             Some("聊天"),
         )
         .await
@@ -690,18 +707,24 @@ pub async fn responses_create(
                     break;
                 }
             };
+        //start patch @bobcat
+        let route_model = replace.route();
+        let route_db_model = replace
+            .fwd_db_model(&state, Some("聊天"), Some(&channel), db_model.as_ref())
+            .await;
+        //end patch
         // 模型映射：Responses 无分辨率档，跳过 body 解析
         let (resolved_model, mapping_source) =
-            router::resolve_model(&channel, model, db_model.as_ref(), None);
+            router::resolve_model(&channel, route_model, route_db_model.as_ref(), None);
 
         // 解析转发规则：复用聊天类别，兜底使用 /v1/responses 路径
         let resolved = match forward::resolve_forward_rule(
             &state,
-            model,
+            route_model,
             &resolved_cat,
             raw_path,
             Some(&channel),
-            db_model.as_ref(),
+            route_db_model.as_ref(),
         )
         .await
         {

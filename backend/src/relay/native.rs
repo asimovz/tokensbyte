@@ -410,6 +410,12 @@ const ARK_ASSET_ACTIONS: &[&str] = &[
     "DeleteAssetGroup",
 ];
 
+// 透传分支专属：非素材类、原样转发到上游的动作（不做归属校验/记录，商业签名分支不识别）
+const ARK_PASSTHROUGH_EXTRA_ACTIONS: &[&str] = &[
+    "CreateVisualValidateSession",
+    "GetVisualValidateResult",
+];
+
 // 以下隔离辅助函数为纯 DB/JSON 逻辑，同时服务于商业分支与 uar: 透传分支，解除门控（逻辑零改动）
 /// 加载当前用户在本插件命名空间下拥有的 Ark 资源 ID 集合
 async fn load_owned_ark_ids(
@@ -1055,8 +1061,10 @@ async fn ark_asset_upstream_passthrough(
         .unwrap_or_else(|| "2024-01-01".to_string());
     let plugin_ns = uac::binding_ns(binding_id);
 
-    // 2. 白名单检查（与火山签名分支同一份白名单）
-    if !ARK_ASSET_ACTIONS.contains(&action.as_str()) {
+    // 2. 白名单检查（素材动作 + 透传专属动作；专属动作仅透传转发，商业签名分支不识别）
+    if !ARK_ASSET_ACTIONS.contains(&action.as_str())
+        && !ARK_PASSTHROUGH_EXTRA_ACTIONS.contains(&action.as_str())
+    {
         return Err(AppError::BadRequest(format!(
             "Unsupported Ark Asset Action: {}",
             action

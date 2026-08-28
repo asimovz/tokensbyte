@@ -92,6 +92,9 @@ pub async fn audio_speech(
 
     // ── 1. Token 模型权限校验（渠道选择前快速拦截） ──
     proxy::check_model_permission(&state, &token, model, &entry_path, Some("音频")).await?;
+    //start patch @bobcat
+    let mut replace = crate::patch::maybe_replace(&state, &token.user_id, model, Some("音频")).await;
+    //end patch
 
     // ── 2. 用户上下文 ──
     let ctx = proxy::get_user_context(&state, &token.user_id).await?;
@@ -101,15 +104,16 @@ pub async fn audio_speech(
 
     while ha.cont() {
         let start_time = std::time::Instant::now();
-        let channel = match proxy::select_channel_for_model(
+        let channel = match crate::patch::select_channel_for_replace(
             &state,
             &token,
-            model,
+            &mut replace,
             &ctx.user_group,
             &ctx.level_id,
             &entry_path,
             &ha.exclude_aids,
             !ha.had_upstream,
+            ha.had_upstream,
             Some("音频"),
         )
         .await
@@ -133,30 +137,37 @@ pub async fn audio_speech(
                 }
             };
 
+        //start patch @bobcat
+        let route_model = replace.route();
+        let route_db_model = replace
+            .fwd_db_model(&state, Some("音频"), Some(&channel), db_model.as_ref())
+            .await;
+        //end patch
+
         // ── 5. 转发规则解析（category = "音频"） ──
         let mut resolved = match forward::resolve_forward_rule(
             &state,
-            model,
+            route_model,
             &resolved_cat,
             &entry_path,
             Some(&channel),
-            db_model.as_ref(),
+            route_db_model.as_ref(),
         )
         .await
         {
             Some(r) => r,
             None => {
-                if forward::model_has_forward_rules(&state, model).await {
+                if forward::model_has_forward_rules(&state, route_model).await {
                     ha.on_access_err(AppError::BadRequest(format!(
                         "模型 '{}' 不支持当前接口，请检查模型对应的转发规则",
-                        model
+                        route_model
                     )));
                     break;
                 }
                 forward::infer_forward_from_base_url(
                     &channel.base_url,
                     &resolved_cat,
-                    db_model.as_ref(),
+                    route_db_model.as_ref(),
                 )
             }
         };
@@ -165,7 +176,7 @@ pub async fn audio_speech(
 
         // 模型映射：渠道内部映射 + 模型表别名映射
         let (final_resolved_model, mapping_source) =
-            router::resolve_model(&channel, model, db_model.as_ref(), None);
+            router::resolve_model(&channel, route_model, route_db_model.as_ref(), None);
 
         // 查询计费规则（供计费阶段使用）
         let mut db_rule =

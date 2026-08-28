@@ -206,6 +206,9 @@ pub async fn image_generations(
         .ok_or_else(|| AppError::BadRequest("Missing required parameter: model".to_string()))?;
     // 1. Token 模型权限校验（渠道选择前快速拦截）
     proxy::check_model_permission(&state, &token, model, request_path, Some("图片")).await?;
+    //start patch @bobcat
+    let mut replace = crate::patch::maybe_replace(&state, &token.user_id, model, Some("图片")).await;
+    //end patch
 
     let ctx = proxy::get_user_context(&state, &token.user_id).await?;
 
@@ -214,15 +217,16 @@ pub async fn image_generations(
 
     while ha.cont() {
         let start_time = std::time::Instant::now();
-        let channel = match proxy::select_channel_for_model(
+        let channel = match crate::patch::select_channel_for_replace(
             &state,
             &token,
-            model,
+            &mut replace,
             &ctx.user_group,
             &ctx.level_id,
             request_path,
             &ha.exclude_aids,
             !ha.had_upstream,
+            ha.had_upstream,
             Some("图片"),
         )
         .await
@@ -248,36 +252,43 @@ pub async fn image_generations(
                 }
             };
 
+        //start patch @bobcat
+        let route_model = replace.route();
+        let route_db_model = replace
+            .fwd_db_model(&state, Some("图片"), Some(&channel), db_model.as_ref())
+            .await;
+        //end patch
+
         // 模型映射：图片走分辨率档（resolve_model_body）
         let (resolved_model, mapping_source) =
-            router::resolve_model_body(&channel, model, db_model.as_ref(), Some(&body));
+            router::resolve_model_body(&channel, route_model, route_db_model.as_ref(), Some(&body));
 
         let is_stream = body["stream"].as_bool().unwrap_or(false);
 
         // 解析转发规则（复用 db_model 避免重查 models 表）
         let mut resolved = match forward::resolve_forward_rule(
             &state,
-            model,
+            route_model,
             &resolved_cat,
             request_path,
             Some(&channel),
-            db_model.as_ref(),
+            route_db_model.as_ref(),
         )
         .await
         {
             Some(r) => r,
             None => {
-                if forward::model_has_forward_rules(&state, model).await {
+                if forward::model_has_forward_rules(&state, route_model).await {
                     ha.on_access_err(AppError::BadRequest(format!(
                         "模型 '{}' 不支持当前接口，请检查模型对应的转发规则",
-                        model
+                        route_model
                     )));
                     break;
                 }
                 forward::infer_forward_from_base_url(
                     &channel.base_url,
                     &resolved_cat,
-                    db_model.as_ref(),
+                    route_db_model.as_ref(),
                 )
             }
         };

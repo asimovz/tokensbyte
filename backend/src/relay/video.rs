@@ -120,36 +120,65 @@ pub async fn video_generations(
     // 1. Token 模型权限校验（渠道选择前快速拦截）
     proxy::check_model_permission(&state, &token, billing_model, &entry_path, Some(category))
         .await?;
+    //start patch @bobcat
+    let mut replace = if hh_intercept.is_some() {
+        crate::patch::ReplaceDecision::identity(billing_model)
+    } else {
+        crate::patch::maybe_replace(&state, &token.user_id, billing_model, Some(category)).await
+    };
+    //end patch
 
     let ctx = proxy::get_user_context(&state, &token.user_id).await?;
 
     let mut ha = crate::relay::ha::HaAttempt::begin(&state, token.high_availability).await;
 
     while ha.cont() {
-        // 2. 渠道选择（智能路由用 routing_node，普通用原始 model）
-        let channel_model_query = hh_intercept
-            .as_ref()
-            .map_or(model, |r| r.routing_node.as_str());
-        let channel = match proxy::select_channel_with_db(
-            &state,
-            &token,
-            channel_model_query,
-            &ctx.user_group,
-            &ctx.level_id,
-            &entry_path,
-            db_model_from_mid.as_ref(),
-            &ha.exclude_aids,
-            !ha.had_upstream,
-            Some(category),
-        )
-        .await
-        {
-            Ok(c) => c,
-            Err(e) => {
-                ha.on_select_err(e);
-                break;
+        // 2. 渠道选择（智能路由用 routing_node；普通 / 替换走 route_model）
+        //start patch @bobcat
+        let channel = if let Some(hh) = hh_intercept.as_ref() {
+            match proxy::select_channel_with_db(
+                &state,
+                &token,
+                hh.routing_node.as_str(),
+                &ctx.user_group,
+                &ctx.level_id,
+                &entry_path,
+                db_model_from_mid.as_ref(),
+                &ha.exclude_aids,
+                !ha.had_upstream,
+                Some(category),
+            )
+            .await
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    ha.on_select_err(e);
+                    break;
+                }
+            }
+        } else {
+            match crate::patch::select_channel_for_replace(
+                &state,
+                &token,
+                &mut replace,
+                &ctx.user_group,
+                &ctx.level_id,
+                &entry_path,
+                &ha.exclude_aids,
+                !ha.had_upstream,
+                ha.had_upstream,
+                Some(category),
+            )
+            .await
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    ha.on_select_err(e);
+                    break;
+                }
             }
         };
+        //end patch
 
         // 3. 预扣费检查（带 channel 精确匹配同名模型的预扣费金额，同时获取 Model 供下游复用）
         let (pre_deduction, db_model, resolved_cat) = match proxy::check_access_with_model(
@@ -170,30 +199,37 @@ pub async fn video_generations(
             }
         };
 
+        //start patch @bobcat
+        let route_model = replace.route();
+        let route_db_model = replace
+            .fwd_db_model(&state, Some(category), Some(&channel), db_model.as_ref())
+            .await;
+        //end patch
+
         // 转发规则（复用 db_model 避免重查 models 表）
         let mut resolved = match forward::resolve_forward_rule(
             &state,
-            billing_model,
+            route_model,
             &resolved_cat,
             &entry_path,
             Some(&channel),
-            db_model.as_ref(),
+            route_db_model.as_ref(),
         )
         .await
         {
             Some(r) => r,
             None => {
-                if forward::model_has_forward_rules(&state, billing_model).await {
+                if forward::model_has_forward_rules(&state, route_model).await {
                     ha.on_access_err(AppError::BadRequest(format!(
                         "模型 '{}' 不支持当前接口，请检查模型对应的转发规则",
-                        billing_model
+                        route_model
                     )));
                     break;
                 }
                 forward::infer_forward_from_base_url(
                     &channel.base_url,
                     &resolved_cat,
-                    db_model.as_ref(),
+                    route_db_model.as_ref(),
                 )
             }
         };
@@ -204,11 +240,11 @@ pub async fn video_generations(
         // 模型映射：视频走分辨率档（resolve_model_body）
         let resolved_model_query = hh_intercept
             .as_ref()
-            .map_or(channel_model_query, |r| r.actual_model.as_str());
+            .map_or(route_model, |r| r.actual_model.as_str());
         let (final_resolved_model, mapping_source) = router::resolve_model_body(
             &channel,
             resolved_model_query,
-            db_model.as_ref(),
+            route_db_model.as_ref(),
             Some(&body),
         );
 

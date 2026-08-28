@@ -28,43 +28,6 @@ fn mask_key(key: &str) -> String {
     format!("{}***{}", &key[..8], &key[key.len() - 4..])
 }
 
-/// Token 查询命中结果
-enum TokenMatch {
-    Active(crate::models::ApiToken, String),
-    Disabled(crate::models::ApiToken, String),
-}
-
-/// 按调用方给定的顺序尝试候选 key（Anthropic 规则下 x-api-key 优先），
-/// 优先返回首个命中且启用的 token 及命中的 key；
-/// 若候选 key 均未命中启用的 token，则返回首个命中的已禁用 token（上层需返回 403）；
-/// 全部未命中返回 None
-async fn lookup_api_token(
-    state: &Arc<AppState>,
-    candidate_keys: &[String],
-) -> Result<Option<TokenMatch>, sqlx::Error> {
-    let mut disabled: Option<(crate::models::ApiToken, String)> = None;
-    for key in candidate_keys {
-        match sqlx::query_as::<_, crate::models::ApiToken>(
-            &state
-                .db
-                .format_query("SELECT * FROM api_tokens WHERE token_key = ?"),
-        )
-        .bind(key)
-        .fetch_optional(&state.db.pool)
-        .await?
-        {
-            Some(t) if t.is_active != 0 => return Ok(Some(TokenMatch::Active(t, key.clone()))),
-            Some(t) => {
-                if disabled.is_none() {
-                    disabled = Some((t, key.clone()));
-                }
-            }
-            None => continue,
-        }
-    }
-    Ok(disabled.map(|(t, k)| TokenMatch::Disabled(t, k)))
-}
-
 /// Extract user claims from JWT token in Authorization header
 pub async fn auth_middleware(
     State(state): State<Arc<AppState>>,
@@ -195,41 +158,13 @@ pub async fn api_key_middleware(
         .unwrap_or_else(|| request.uri().path().to_string());
     // 余额查询等轻量只读接口无需记录错误日志
     let skip_log = path.ends_with("/balance");
-    let auth_header: Option<String> = request
+    let auth_header = match request
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .map(str::to_string);
-
-    // Anthropic 规则鉴权优先级：x-api-key 最高；携带时优先按 x-api-key 鉴权，
-    // 未命中（或无 x-api-key）再按 Authorization Bearer 鉴权。
-    let x_api_key: Option<String> = request
-        .headers()
-        .get("x-api-key")
-        .or_else(|| request.headers().get("X-Api-Key"))
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .filter(|k| !k.is_empty())
-        .map(str::to_string);
-
-    let bearer_key: Option<String> = auth_header
-        .as_deref()
-        .and_then(|h| h.strip_prefix("Bearer "))
-        .filter(|k| !k.is_empty())
-        .map(str::to_string);
-
-    // 候选 key 组装：x-api-key 优先，Authorization 次之（相同自动去重）
-    let mut candidate_keys: Vec<String> = Vec::new();
-    match (&x_api_key, &bearer_key) {
-        (Some(xk), Some(b)) => {
-            candidate_keys.push(xk.clone());
-            if xk != b {
-                candidate_keys.push(b.clone());
-            }
-        }
-        (Some(xk), None) => candidate_keys.push(xk.clone()),
-        (None, Some(b)) => candidate_keys.push(b.clone()),
-        (None, None) => {
+    {
+        Some(h) => h,
+        None => {
             if !skip_log && !path.ends_with("/health") && !path.ends_with("favicon.ico") {
                 tracing::warn!("[Auth] {} | 缺少 Authorization 请求头", path);
                 crate::relay::proxy::record_error_log(
@@ -249,75 +184,59 @@ pub async fn api_key_middleware(
             return AppError::AuthFailed("Missing Authorization Header".to_string())
                 .into_response();
         }
-    }
+    };
 
-    // Authorization 存在但格式非法（非 Bearer 或空）：
-    // 仅当 x-api-key 也不可用时才拒绝；否则改按 x-api-key 鉴权，避免误伤 Anthropic 客户端。
-    if let Some(h) = auth_header.as_deref() {
-        if bearer_key.is_none() {
-            if x_api_key.is_none() {
-                tracing::warn!(
-                    "[Auth] {} | Bearer 格式错误, header={}",
-                    path,
-                    &h[..h.len().min(20)]
-                );
-                if !skip_log {
-                    crate::relay::proxy::record_error_log(
-                        &state,
-                        "unknown",
-                        None,
-                        None,
-                        "unknown",
-                        401,
-                        &path,
-                        "Invalid Bearer Token Format",
-                        None,
-                        None,
-                    )
-                    .await;
-                }
-                return AppError::AuthFailed("Invalid Bearer Token Format".to_string())
-                    .into_response();
+    let api_key = match auth_header.strip_prefix("Bearer ") {
+        Some(k) => k,
+        None => {
+            tracing::warn!(
+                "[Auth] {} | Bearer 格式错误, header={}",
+                path,
+                &auth_header[..auth_header.len().min(20)]
+            );
+            if !skip_log {
+                crate::relay::proxy::record_error_log(
+                    &state,
+                    "unknown",
+                    None,
+                    None,
+                    "unknown",
+                    401,
+                    &path,
+                    "Invalid Bearer Token Format",
+                    None,
+                    None,
+                )
+                .await;
             }
-            tracing::warn!("[Auth] {} | Authorization 格式异常，改用 x-api-key 鉴权", path);
+            return AppError::AuthFailed("Invalid Bearer Token Format".to_string()).into_response();
         }
-    }
+    };
 
-    let token: crate::models::ApiToken = match lookup_api_token(&state, &candidate_keys).await {
-        Ok(Some(TokenMatch::Active(t, matched_key))) => {
-            let via_x_api_key = x_api_key.as_deref() == Some(matched_key.as_str());
-            if via_x_api_key {
-                tracing::info!(
-                    "[Auth] {} | x-api-key 验证通过: key={}, token_id={}, user={}",
-                    path,
-                    mask_key(&matched_key),
-                    t.id,
-                    t.user_id
-                );
-            } else if x_api_key.is_some() {
-                tracing::info!(
-                    "[Auth] {} | x-api-key 未命中, 回退 Authorization 验证通过: key={}, token_id={}, user={}",
-                    path,
-                    mask_key(&matched_key),
-                    t.id,
-                    t.user_id
-                );
-            } else {
-                tracing::info!(
-                    "[Auth] {} | 令牌验证通过: key={}, token_id={}, user={}",
-                    path,
-                    mask_key(&matched_key),
-                    t.id,
-                    t.user_id
-                );
-            }
+    let token: crate::models::ApiToken = match sqlx::query_as::<_, crate::models::ApiToken>(
+        &state
+            .db
+            .format_query("SELECT * FROM api_tokens WHERE token_key = ?"),
+    )
+    .bind(api_key)
+    .fetch_optional(&state.db.pool)
+    .await
+    {
+        Ok(Some(t)) if t.is_active != 0 => {
+            tracing::info!(
+                "[Auth] {} | 令牌验证通过: key={}, token_id={}, user={}",
+                path,
+                mask_key(api_key),
+                t.id,
+                t.user_id
+            );
             t
         }
-        Ok(Some(TokenMatch::Disabled(t, matched_key))) => {
+        Ok(Some(t)) => {
             tracing::warn!(
                 "[Auth] {} | 令牌已禁用: key={}, token_id={}, user={}",
                 path,
-                mask_key(&matched_key),
+                mask_key(api_key),
                 t.id,
                 t.user_id
             );
@@ -339,11 +258,7 @@ pub async fn api_key_middleware(
             return AppError::Forbidden("Token disabled".to_string()).into_response();
         }
         Ok(None) => {
-            tracing::warn!(
-                "[Auth] {} | 无效 API Key: key={}",
-                path,
-                mask_key(&candidate_keys[0])
-            );
+            tracing::warn!("[Auth] {} | 无效 API Key: key={}", path, mask_key(api_key));
             if !skip_log {
                 crate::relay::proxy::record_error_log(
                     &state,
