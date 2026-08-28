@@ -2536,6 +2536,11 @@ macro_rules! pg_migration_blocks {
         "ANALYZE logs"
     );
 
+    // upstream_asset_bindings.is_active 由 INT4 升级为 BIGINT（对齐 Rust i64 与项目其他表约定；幂等）
+    once_migration!(pool, "upstream_asset_bindings_is_active_bigint_v1",
+        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'upstream_asset_bindings' AND column_name = 'is_active' AND data_type <> 'bigint') THEN ALTER TABLE upstream_asset_bindings ALTER COLUMN is_active TYPE BIGINT; END IF; END $$"
+    );
+
     // 火山视频转素材ID：绑定「上游渠道配置」(channel_configs) + 系统增强插件种子
     once_migration!(pool, "upstream_asset_relay_v1",
         r#"CREATE TABLE IF NOT EXISTS upstream_asset_bindings (
@@ -2545,7 +2550,7 @@ macro_rules! pg_migration_blocks {
             asset_base_path TEXT NOT NULL DEFAULT '',
             forward_rule_id BIGINT,
             group_id TEXT,
-            is_active INTEGER NOT NULL DEFAULT 1,
+            is_active BIGINT NOT NULL DEFAULT 1,
             remark TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
