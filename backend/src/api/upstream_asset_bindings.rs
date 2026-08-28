@@ -38,7 +38,7 @@ pub struct BindingRow {
     pub updated_at: Option<String>,
     pub channel_name: Option<String>,
     pub channel_base_url: Option<String>,
-    pub channel_status: Option<i64>,
+    pub channel_status: Option<i32>,
 }
 
 #[derive(Deserialize)]
