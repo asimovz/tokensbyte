@@ -2074,9 +2074,6 @@ const Models: React.FC = () => {
                       if (!value || !Array.isArray(value) || value.length === 0) {
                         return Promise.reject(new Error('请选择挂载转发规则组合'));
                       }
-                      if (value.length > 1) {
-                        return Promise.reject(new Error('只能选择一个转发规则组合'));
-                      }
                       return Promise.resolve();
                     }
                   }
@@ -2251,7 +2248,7 @@ const Models: React.FC = () => {
                       <Form.Item shouldUpdate={(prev, cur) => prev.forward_rule_ids !== cur.forward_rule_ids} noStyle>
                         {() => {
                           const val = form.getFieldValue('forward_rule_ids') || [];
-                          const selectedRule = allForwardRules.find(r => val.includes(r.id));
+                          const selectedRules = allForwardRules.filter(r => val.includes(r.id));
                           const isActive = activeRightPanel === 'forward_rules';
                           return (
                             <div onClick={() => setActiveRightPanel('forward_rules')} style={{ padding: '8px 12px', borderRadius: 6, marginBottom: 6, border: isActive ? '1px solid var(--text)' : (isLight ? '1px solid #e5e4e7' : '1px solid rgba(255,255,255,0.08)'), background: isActive ? (isLight ? '#f9fafb' : 'rgba(255,255,255,0.04)') : (isLight ? '#fff' : 'rgba(255,255,255,0.02)'), cursor: 'pointer', transition: 'all 0.2s' }}>
@@ -2260,10 +2257,10 @@ const Models: React.FC = () => {
                                   <span style={{ color: '#ff4d4f', marginRight: 4, fontFamily: 'SimSun, sans-serif' }}>*</span>挂载转发规则组合
                                 </Text>
                                 <span style={{ fontSize: 13, color: isActive ? 'var(--text)' : 'var(--text-secondary)' }}>
-                                  {selectedRule ? (
+                                  {selectedRules.length > 0 ? (
                                     <>
-                                      {selectedRule.name}
-                                      {selectedRule.eid && <span style={{ opacity: 0.6, marginLeft: 6 }}>(EID: {selectedRule.eid})</span>}
+                                      {selectedRules.map(r => r.name).join('、')}
+                                      <span style={{ opacity: 0.6, marginLeft: 6 }}>({selectedRules.length})</span>
                                     </>
                                   ) : (
                                     <span style={{ opacity: 0.5 }}>点击选择</span>
@@ -2709,7 +2706,7 @@ const Models: React.FC = () => {
                                     <div 
                                       key={r.id}
                                       onClick={() => {
-                                        form.setFieldsValue({ forward_rule_ids: [r.id] });
+                                        const cur: number[] = Array.isArray(val) ? val : []; const next = cur.includes(r.id) ? cur.filter((id: number) => id !== r.id) : [...cur, r.id]; form.setFieldsValue({ forward_rule_ids: next });
                                       }}
                                       style={{ 
                                         padding: '6px 12px', 
