@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 const BINDING_SELECT: &str = "SELECT b.id, b.name, b.channel_config_id, b.asset_base_path, \
-     b.group_id, b.is_active, b.remark, b.created_at::text AS created_at, \
+     b.asset_api_profile, b.group_id, b.is_active, b.remark, b.created_at::text AS created_at, \
      b.updated_at::text AS updated_at, c.name AS channel_name, c.base_url AS channel_base_url, \
      c.status AS channel_status \
      FROM upstream_asset_bindings b LEFT JOIN channel_configs c ON c.id = b.channel_config_id";
@@ -31,6 +31,8 @@ pub struct BindingRow {
     pub name: String,
     pub channel_config_id: i64,
     pub asset_base_path: String,
+    /// API 协议描述符 JSON（空 = 原火山透传行为），供前端编辑回显
+    pub asset_api_profile: Option<String>,
     pub group_id: Option<String>,
     pub is_active: i64,
     pub remark: Option<String>,
@@ -49,6 +51,8 @@ pub struct CreateBindingRequest {
     pub asset_base_path: String,
     #[serde(default)]
     pub remark: Option<String>,
+    #[serde(default)]
+    pub asset_api_profile: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -58,6 +62,24 @@ pub struct UpdateBindingRequest {
     pub asset_base_path: Option<String>,
     pub is_active: Option<i64>,
     pub remark: Option<String>,
+    pub asset_api_profile: Option<String>,
+}
+
+/// 校验协议描述符：未传（None）= 不改动；空串 = 清除描述符（回落原火山透传）；
+/// 非空必须能解析为合法 AssetApiProfile——描述符加载端对非法 JSON 是静默回落，
+/// 若不在入口拦住，存坏后透传行为会悄然变成火山直连、极难排查
+fn validate_profile(raw: Option<&str>) -> Result<Option<String>, AppError> {
+    let Some(s) = raw else { return Ok(None) };
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Ok(Some(String::new()));
+    }
+    if crate::relay::asset_api_profile::AssetApiProfile::parse(trimmed).is_none() {
+        return Err(AppError::BadRequest(
+            "API 协议描述符不是合法 JSON，或不符合描述符结构（顶层需为对象，actions 为动作映射）".into(),
+        ));
+    }
+    Ok(Some(trimmed.to_string()))
 }
 
 async fn ensure_channel_config_exists(state: &AppState, id: i64) -> Result<(), AppError> {
@@ -101,14 +123,16 @@ pub async fn create_binding(
         return Err(AppError::BadRequest("请选择上游渠道".into()));
     }
     ensure_channel_config_exists(&state, req.channel_config_id).await?;
+    let profile = validate_profile(req.asset_api_profile.as_deref())?;
     let id: i64 = sqlx::query_scalar(&state.db.format_query(
-        "INSERT INTO upstream_asset_bindings (name, channel_config_id, asset_base_path, remark) \
-         VALUES (?, ?, ?, ?) RETURNING id",
+        "INSERT INTO upstream_asset_bindings (name, channel_config_id, asset_base_path, remark, asset_api_profile) \
+         VALUES (?, ?, ?, ?, ?) RETURNING id",
     ))
     .bind(&name)
     .bind(req.channel_config_id)
     .bind(req.asset_base_path.trim())
     .bind(req.remark.as_deref().unwrap_or_default())
+    .bind(profile.as_deref().unwrap_or_default())
     .fetch_one(&state.db.pool)
     .await
     .map_err(|e| AppError::Internal(format!("创建素材绑定失败: {e}")))?;
@@ -131,6 +155,7 @@ pub async fn update_binding(
         }
         ensure_channel_config_exists(&state, cid).await?;
     }
+    let profile = validate_profile(req.asset_api_profile.as_deref())?;
     let res = sqlx::query(&state.db.format_query(
         "UPDATE upstream_asset_bindings SET \
          name = COALESCE(?, name), \
@@ -138,6 +163,7 @@ pub async fn update_binding(
          asset_base_path = COALESCE(?, asset_base_path), \
          is_active = COALESCE(?, is_active), \
          remark = COALESCE(?, remark), \
+         asset_api_profile = COALESCE(?, asset_api_profile), \
          updated_at = CURRENT_TIMESTAMP WHERE id = ?",
     ))
     .bind(req.name.as_deref().map(str::trim))
@@ -145,6 +171,7 @@ pub async fn update_binding(
     .bind(req.asset_base_path.as_deref().map(str::trim))
     .bind(req.is_active)
     .bind(req.remark.as_deref())
+    .bind(profile)
     .bind(id)
     .execute(&state.db.pool)
     .await

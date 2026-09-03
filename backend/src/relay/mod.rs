@@ -7,6 +7,8 @@
 
 #[cfg(feature = "commercial_plugins")]
 pub mod asset_convert;
+// 上游素材 API 描述符引擎：绑定级 asset_api_profile 声明式协议适配（非火山上游如 fantaframe/cmcc）
+pub mod asset_api_profile;
 pub mod billing_pipeline;
 pub mod cascade;
 pub mod channel_quota;

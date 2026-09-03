@@ -133,6 +133,63 @@ pub async fn call_action_logged(
     serde_json::from_str(&text).map_err(|e| anyhow!("解析上游素材响应失败: {} - {}", e, text))
 }
 
+/// 通用 Bearer 调用（指定 HTTP 方法 + 相对路径 + 可选请求体），供 asset_api_profile 描述符分支使用。
+/// `method` 为 reqwest::Method；`body` 为 None 时不发送请求体（GET/DELETE）。
+/// 与 call_action_logged 一致记录完整日志。
+pub async fn call_upstream_http(
+    ctx: &UpstreamCallCtx<'_>,
+    method: reqwest::Method,
+    path: &str,
+    body: Option<&Value>,
+) -> Result<Value> {
+    let url = join_url(ctx.endpoint_base, path);
+    let req_payload = body.map(|b| b.to_string()).unwrap_or_default();
+    let mut builder = ctx
+        .http
+        .request(method, &url)
+        .header("Authorization", format!("Bearer {}", ctx.api_key));
+    if let Some(b) = body {
+        builder = builder
+            .header("Content-Type", "application/json")
+            .json(b);
+    }
+    let res = crate::services::http_client::with_upstream_timeout(builder)
+        .send()
+        .await?;
+    let status_code = res.status().as_u16() as i32;
+    let text = res.text().await.unwrap_or_default();
+    spawn_api_log(
+        ctx.db.clone(),
+        ctx.user_id.to_string(),
+        ctx.plugin_name.to_string(),
+        format!("{} {}", ctx.plugin_name, path),
+        req_payload,
+        text.clone(),
+        status_code,
+    );
+    if !(200..300).contains(&status_code) {
+        return Err(anyhow!("上游素材接口错误: {} - {}", status_code, text));
+    }
+    serde_json::from_str(&text).map_err(|e| anyhow!("解析上游素材响应失败: {} - {}", e, text))
+}
+
+/// 读取绑定的 asset_api_profile 描述符（无配置返回 None）。
+pub async fn load_binding_profile(
+    db: &crate::db::Database,
+    binding_id: i64,
+) -> Option<crate::relay::asset_api_profile::AssetApiProfile> {
+    let sql = db.format_query(
+        "SELECT asset_api_profile FROM upstream_asset_bindings WHERE id = ?",
+    );
+    let row: Option<(Option<String>,)> = sqlx::query_as(&sql)
+        .bind(binding_id)
+        .fetch_optional(&db.pool)
+        .await
+        .unwrap_or(None);
+    let raw = row.and_then(|(p,)| p).unwrap_or_default();
+    crate::relay::asset_api_profile::AssetApiProfile::parse(&raw)
+}
+
 #[derive(sqlx::FromRow)]
 struct BindingCredRow {
     id: i64,

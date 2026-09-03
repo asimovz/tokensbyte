@@ -2574,6 +2574,13 @@ macro_rules! pg_migration_blocks {
              category = EXCLUDED.category"#
     );
 
+    // upstream_asset_bindings 新增 asset_api_profile（协议描述符）列：非火山上游（如 fantaframe/cmcc）
+    // 通过声明式描述符在透传分支做双向协议适配；无配置时保持原火山透传行为（幂等）
+    // 注意：必须位于建表迁移 upstream_asset_relay_v1 之后，否则空库首启时表尚不存在会失败
+    once_migration!(pool, "upstream_asset_bindings_asset_api_profile_v1",
+        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'upstream_asset_bindings' AND column_name = 'asset_api_profile') THEN ALTER TABLE upstream_asset_bindings ADD COLUMN asset_api_profile TEXT; END IF; END $$"
+    );
+
     // ── 模型广场：补齐系统供应商与模型类型英文名称 ──
     once_migration!(pool, "model_marketplace_system_names_en_v1",
         "UPDATE model_providers SET name_en = CASE name WHEN '火山引擎' THEN 'Volcengine' WHEN '谷歌' THEN 'Google' WHEN '阿里云' THEN 'Alibaba Cloud' WHEN '腾讯云' THEN 'Tencent Cloud' WHEN '可灵 AI' THEN 'Kling AI' ELSE name_en END WHERE name_en = ''",

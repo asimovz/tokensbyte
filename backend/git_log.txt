@@ -1,10 +1,10 @@
-7ebd17958138a3190f9e4088417e493d996959fb7ebd179cgm5pm2026-08-15 15:00:54update
-3dbe5cb4d8f553930311eba65c7122feba7c67c23dbe5cbaqachatm5pm2026-08-10 09:01:03uodate
-ee5aedb2e3bba5f7909ac3d6c01cccb69b3e10beee5aedbcgm5pm2026-08-02 16:02:11update
-f1228ef49846b3c3c31893f432134578208c5e19f1228efcgm5pm2026-08-02 15:50:59update，更新开源版本的稳定性和新增加 minimax 的视频模型 h3 的计费
-14476ed19045ab732f025ca99a673ba13a25b29414476edArtsmcp2026-07-31 16:41:28fix(deploy): 优化 compose 镜像拉取策略为 always，禁止部署时触发本地 build
-433efd1ea890518bd91a2ed98c33e7a991f88b0a433efd1SAMDO-WORK-2025\samdo2026-07-31 14:09:34refactor(deploy): remove deprecated ADMIN_PASSWORD/ADMIN_USERNAME env vars in favor of Web UI initialization
-78b03aa21a7fd97138ac101375e4946baade875978b03aaSAMDO-WORK-2025\samdo2026-07-31 14:06:08docs(readme): update license reference to GNU AGPLv3 & recommend deploy.sh
-62243d7e0e8517e7d59c09936a8156c137c29a2662243d7SAMDO-WORK-2025\samdo2026-07-31 11:57:52feat(deploy): update default image registry to CNB (docker.cnb.cool) for fast mainland China access
-f61275ed2128bd74f558f444899fa4c6c0fbbc3af61275eArtsmcp2026-07-31 11:54:09build(deps): 添加 OpenSSL 静态编译依赖并更新 gitignore 离线构建忽略项
-f9feddc966811d429d548e01f440269d23ac5396f9feddcSAMDO-WORK-2025\samdo2026-07-31 11:51:17ci: remove automatic push triggers, keep manual workflow_dispatch only
+243546c65c2ea6fc049c28de9668a5090cbf7761243546casimovz2026-08-31 19:02:53feat(models): 转发规则组合支持多选挂载
+a4c5fd8b458c7565bcfc6629c47e3f2ee92e11d6a4c5fd8asimovz2026-08-28 14:52:03feat(custom): 活体认证两接口透传白名单(已上线验证);归拢工作区存量定制改动;忽略构建产物与临时目录
+fdf89d867c5512e795deb14c77a0e2d0b88fbb12fdf89d8asimovz2026-08-28 14:52:03chore: 统一换行符为 LF (.gitattributes + 全库归一化),消除跨平台同步噪音
+4b63a877d244cb4b7e570050d8baa7cafa8db5cf4b63a87asimovz2026-08-28 01:09:52fix(api): BindingRow.channel_status 改为 i32,对齐 channel_configs.status INT4 与全库约定,修复绑定列表 500
+490ba0db5186206d3e61086d02295638ed054fb9490ba0dasimovz2026-08-28 01:04:34fix(db): upstream_asset_bindings.is_active 由 INTEGER 改为 BIGINT,修复 /api/v1/upstream-asset-bindings 查询 500(sqlx i64 与 INT4 不兼容);新增幂等迁移修正存量库
+45fc611031e748a42318aa3a4b69ed03aca8d4df45fc611asimovz2026-08-27 23:31:02fix(relay): body_transform bt_set merge分支对非对象源值静默丢弃,导致 move 到嵌套路径(如 ratio→metadata.ratio)时丢值;改为直接写入
+c5a613779b51a209e9850ee0610a95c8cc464293c5a6137asimovz2026-08-27 16:10:51fix(relay): 补回 body_transform 转换引擎(7570c99 上传时文件内容被旧版覆盖,导致编译产物缺失该功能)
+1afee888d2e3f18177142e0b31e9c80de70062541afee88tokensbyte-deploy2026-08-27 09:57:44feat(asset): 素材透传默认路由(按用户组→优先级自动选绑,可自动建绑定)+绑定管理CRUD接口+前端上游素材绑定页面; 修复native.rs format_query临时值E0716
+a54b56e5f462e0b30f4a51b0a18242cd4b2d5fcea54b56etokensbyte-deploy2026-08-27 03:01:23feat(relay): /api 素材接口新增 uar:<绑定ID> 上游透传分支（Bearer 透传，凭证读 upstream_asset_bindings+channel_configs，复用用户隔离/归属/日志；原 asset_manager AK/SK 分支不变）
+7570c99bf9e3f941ed13730ad10b41781435cfc07570c99tokensbyte-deploy2026-08-25 10:26:54feat(relay): forward_rules config_json 新增 body_transform 声明式请求体转换（7 种指令: rename/move/template/cast/set/default/delete，支持点路径嵌套，页面可配置适配异构上游）

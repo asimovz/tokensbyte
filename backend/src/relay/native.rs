@@ -1224,25 +1224,75 @@ async fn ark_asset_upstream_passthrough(
         }
     }
 
-    // 6. Bearer 透传转发（Action/Version 查询参数 + JSON body，与火山官方协议一致，带完整日志）
-    let ctx = uac::UpstreamCallCtx {
-        http: &state.http_client,
-        db: &state.db,
-        user_id: &token.user_id,
-        plugin_name: &plugin_ns,
-        endpoint_base: &endpoint_base,
-        api_key: &api_key,
-    };
-    let mut res = match uac::call_action_logged(&ctx, &action, &body).await {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::error!(
-                "[ArkAssetPassthrough] {} 失败 绑定#{}: {}",
-                action,
-                binding_id,
-                e
-            );
-            return Err(AppError::UpstreamError(e.to_string()));
+    // 6. 转发：绑定配置了 asset_api_profile 时走描述符双向适配分支（入口把火山请求转上游格式、
+    //    出口把上游响应包回火山信封），上方归属校验与下方 List 过滤/后置记录零改动复用；否则原火山透传
+    let mut res = if let Some(profile) = uac::load_binding_profile(&state.db, binding_id).await {
+        use crate::relay::asset_api_profile as aap;
+        if profile.is_unsupported(&action) {
+            return Err(AppError::BadRequest(format!(
+                "上游绑定#{} 暂未接入该操作: {}",
+                binding_id, action
+            )));
+        }
+        let Some(spec) = profile.actions.get(&action) else {
+            return Err(AppError::BadRequest(format!(
+                "上游绑定#{} 协议描述符未配置该操作: {}",
+                binding_id, action
+            )));
+        };
+        let (method, path, up_body) = aap::build_upstream_request(spec, &body);
+        let ctx = uac::UpstreamCallCtx {
+            http: &state.http_client,
+            db: &state.db,
+            user_id: &token.user_id,
+            plugin_name: &plugin_ns,
+            endpoint_base: &endpoint_base,
+            api_key: &api_key,
+        };
+        match uac::call_upstream_http(&ctx, method, &path, up_body.as_ref()).await {
+            Ok(v) => match aap::transform_response(spec, &action, &version, &v) {
+                Ok(envelope) => envelope,
+                Err(msg) => {
+                    tracing::error!(
+                        "[ArkAssetPassthrough] {} 上游业务错误 绑定#{}: {}",
+                        action,
+                        binding_id,
+                        msg
+                    );
+                    return Err(AppError::UpstreamError(msg));
+                }
+            },
+            Err(e) => {
+                tracing::error!(
+                    "[ArkAssetPassthrough] {} 描述符调用失败 绑定#{}: {}",
+                    action,
+                    binding_id,
+                    e
+                );
+                return Err(AppError::UpstreamError(e.to_string()));
+            }
+        }
+    } else {
+        // Bearer 透传转发（Action/Version 查询参数 + JSON body，与火山官方协议一致，带完整日志）
+        let ctx = uac::UpstreamCallCtx {
+            http: &state.http_client,
+            db: &state.db,
+            user_id: &token.user_id,
+            plugin_name: &plugin_ns,
+            endpoint_base: &endpoint_base,
+            api_key: &api_key,
+        };
+        match uac::call_action_logged(&ctx, &action, &body).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!(
+                    "[ArkAssetPassthrough] {} 失败 绑定#{}: {}",
+                    action,
+                    binding_id,
+                    e
+                );
+                return Err(AppError::UpstreamError(e.to_string()));
+            }
         }
     };
 
@@ -1319,6 +1369,29 @@ async fn ark_asset_upstream_passthrough(
                     .bind(&id).bind(&uid).bind(&ns)
                     .execute(&s.db.pool).await;
                 });
+            }
+        }
+        "GetVisualValidateResult" => {
+            // 真人认证成功时上游隐式创建素材组：补录本地组归属，
+            // 否则后续 CreateAsset 归属校验会判该组"无主"而拦截（火山信封响应无 status 字段时不受影响）
+            if res.pointer("/Result/status").and_then(|v| v.as_str()) == Some("succeeded") {
+                if let Some(gid) = res
+                    .pointer("/Result/group_id")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                {
+                    let s = state.clone();
+                    let uid = token.user_id.clone();
+                    let gid = gid.to_string();
+                    let ns = plugin_ns.clone();
+                    tokio::spawn(async move {
+                        let _ = sqlx::query(&s.db.format_query(
+                            "INSERT INTO plugin_asset_groups (user_id, group_id, name, plugin_ns) VALUES (?, ?, '真人认证组', ?)"
+                        ))
+                        .bind(&uid).bind(&gid).bind(&ns)
+                        .execute(&s.db.pool).await;
+                    });
+                }
             }
         }
         _ => {}

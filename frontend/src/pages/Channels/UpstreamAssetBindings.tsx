@@ -10,13 +10,14 @@ import { Table, Button, Space, Modal, Form, Input, Select, Switch, message, Popc
 import { PlusOutlined, EditOutlined, DeleteOutlined, ApiOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
 
-const { Title, Text } = Typography;
+const { Title, Text, Link } = Typography;
 
 interface BindingRow {
   id: number;
   name: string;
   channel_config_id: number;
   asset_base_path: string;
+  asset_api_profile?: string | null;
   group_id?: string | null;
   is_active: number;
   remark?: string | null;
@@ -32,6 +33,38 @@ interface ChannelConfigOption {
   name: string;
   base_url: string;
 }
+
+// 描述符示例模板：非火山上游（如平行幻帧/cmcc）的请求/响应双向适配声明，
+// 完整字段说明见后端 relay/asset_api_profile.rs
+const PROFILE_TEMPLATE = JSON.stringify({
+  actions: {
+    CreateAssetGroup: {
+      method: 'POST',
+      path: '/v1/video/assets/groups',
+      inject: { provider: 'cmcc', groupType: 'AIGC' },
+      rename: { Name: 'groupName', Description: 'description' },
+      response: { unwrap_body: true, ok_path: 'state', ok_value: 'OK', id_path: 'groupId' },
+    },
+    GetAsset: {
+      method: 'GET',
+      path: '/v1/video/assets/{assetId}',
+      path_params: { assetId: 'Id' },
+      response: { unwrap_body: true, ok_path: 'state', ok_value: 'OK', raw_result: true },
+    },
+    ListAssets: {
+      method: 'POST',
+      path: '/v1/video/assets/list',
+      defaults: { pageNo: 1, pageSize: 20, statuses: ['ACTIVE'] },
+      rename: { PageNumber: 'pageNo', PageSize: 'pageSize' },
+      keep: ['provider', 'assetName', 'statuses', 'pageNo', 'pageSize'],
+      response: {
+        unwrap_body: true, ok_path: 'state', ok_value: 'OK',
+        list: { items_path: 'data', item_id_field: 'assetId', total_path: 'total', target_key: 'Assets' },
+      },
+    },
+  },
+  unsupported: ['UpdateAsset'],
+}, null, 2);
 
 const UpstreamAssetBindings: React.FC = () => {
   const [bindings, setBindings] = useState<BindingRow[]>([]);
@@ -72,7 +105,7 @@ const UpstreamAssetBindings: React.FC = () => {
   const openCreate = () => {
     setEditing(null);
     form.resetFields();
-    form.setFieldsValue({ asset_base_path: '' });
+    form.setFieldsValue({ asset_base_path: '', asset_api_profile: '' });
     setModalVisible(true);
   };
 
@@ -82,6 +115,7 @@ const UpstreamAssetBindings: React.FC = () => {
       name: record.name,
       channel_config_id: record.channel_config_id,
       asset_base_path: record.asset_base_path,
+      asset_api_profile: record.asset_api_profile || '',
       remark: record.remark || '',
     });
     setModalVisible(true);
@@ -173,6 +207,20 @@ const UpstreamAssetBindings: React.FC = () => {
       dataIndex: 'asset_base_path',
       width: 150,
       render: (v: string) => (v ? <Text code>{v}</Text> : <Text type="secondary">根路径（?Action= 直收）</Text>),
+    },
+    {
+      title: '协议适配',
+      dataIndex: 'asset_api_profile',
+      width: 100,
+      render: (v?: string | null) => (v && v.trim() ? (
+        <Tooltip title="已配置 API 协议描述符，透传时按描述符做请求/响应双向适配">
+          <Tag color="blue">描述符</Tag>
+        </Tooltip>
+      ) : (
+        <Tooltip title="未配置描述符，按火山官方素材协议直接透传">
+          <Text type="secondary">火山直透</Text>
+        </Tooltip>
+      )),
     },
     {
       title: '上游素材组',
@@ -280,6 +328,37 @@ const UpstreamAssetBindings: React.FC = () => {
             extra="拼接在渠道 base_url 之后；留空表示上游在根路径直接接收 ?Action=（如 https://xxx/ark/?Action=... 则留空）"
           >
             <Input placeholder="留空 = 根路径；否则填如 /ark" maxLength={255} />
+          </Form.Item>
+          <Form.Item
+            name="asset_api_profile"
+            label="API 协议描述符（JSON）"
+            rules={[{
+              validator: (_, value) => {
+                if (!value || !value.trim()) return Promise.resolve();
+                try {
+                  const obj = JSON.parse(value);
+                  if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) {
+                    return Promise.reject(new Error('描述符顶层必须是 JSON 对象'));
+                  }
+                  return Promise.resolve();
+                } catch {
+                  return Promise.reject(new Error('JSON 格式不合法'));
+                }
+              },
+            }]}
+            extra={
+              <span>
+                非火山协议的上游（如平行幻帧/cmcc）在此填入声明式描述符，透传时自动做请求/响应双向适配；
+                留空 = 保持火山协议直透。保存后立即生效，无需重启。{' '}
+                <Link onClick={() => form.setFieldsValue({ asset_api_profile: PROFILE_TEMPLATE })}>填入示例模板</Link>
+              </span>
+            }
+          >
+            <Input.TextArea
+              rows={10}
+              placeholder='{"actions": {"CreateAsset": {"method": "POST", "path": "...", ...}}, "unsupported": []}'
+              style={{ fontFamily: 'monospace', fontSize: 12 }}
+            />
           </Form.Item>
           <Form.Item name="remark" label="备注">
             <Input.TextArea rows={2} maxLength={255} />
