@@ -562,40 +562,94 @@ async fn ensure_ark_owned_or_claim(
     Ok(())
 }
 
-/// 默认透传路由：按「用户分组→渠道优先级→上游渠道→绑定」解析素材透传绑定。
-/// 渠道分组匹配语义与 select_channel 一致（user_groups 含分组/等级，或 '[]' 表示全部分组）；
-/// 命中渠道的 preset 若尚无绑定则自动创建（素材路径留空），使终端用户可完全按火山官方文档调用。
-async fn resolve_default_asset_binding(state: &AppState, user_id: &str) -> Option<i64> {
+/// 素材透传绑定解析（自上而下，命中即返回）：
+/// 1. 用户等级 → `asset_binding_levels` 精确映射（管理员在【上游素材绑定】页配置）
+/// 2. `is_default = 1` 的默认绑定（未单独配置的普通用户走这里）
+/// 3. 兼容旧配置：`channels` 的 user_groups/priority 选渠（已补齐 exclude_user_groups 黑名单）
+/// 4. 全库无任何绑定 → `Ok(None)` 回落原有分支；有绑定却都没命中 → 明确报错
+///
+/// 第 3 级是过渡兼容层：等级映射与默认绑定配好后就不会再走到，稳定后可整段删除。
+/// 旧实现在这一层有两个问题：一是没取 exclude_user_groups（字段压根不在 SELECT 里），
+/// 导致高 priority 的纯 LLM 渠道行会劫持素材请求，只能靠把目标渠道 priority 调到 100 绕过；
+/// 二是首个无绑定的渠道会被自动 INSERT 一条绑定，可能给纯文本 LLM 网关凭空造出素材上游。
+async fn resolve_default_asset_binding(
+    state: &AppState,
+    user_id: &str,
+) -> Result<Option<i64>, AppError> {
     #[derive(sqlx::FromRow)]
     struct UserGroupRow {
         user_group: String,
         level_id: Option<i64>,
     }
-    let Ok(ug) = sqlx::query_as::<_, UserGroupRow>(
-        &state.db.format_query(
-            "SELECT u.user_group, ul.id AS level_id FROM users u \
-             LEFT JOIN user_levels ul ON u.user_group = ul.group_key WHERE u.id = ?",
-        ),
-    )
+    let ug = sqlx::query_as::<_, UserGroupRow>(&state.db.format_query(
+        "SELECT u.user_group, ul.id AS level_id FROM users u \
+         LEFT JOIN user_levels ul ON u.user_group = ul.group_key WHERE u.id = ?",
+    ))
     .bind(user_id)
     .fetch_optional(&state.db.pool)
     .await
-    else {
-        return None;
-    };
+    .map_err(|e| AppError::Internal(format!("查询用户分组失败: {e}")))?;
     let Some(ug) = ug else {
-        return None;
+        return Ok(None);
     };
+    let level_id_str = ug.level_id.unwrap_or_default().to_string();
 
+    // ── 一级：等级 → 绑定 精确映射（绑定与其上游渠道均须启用）──
+    if let Some(lid) = ug.level_id {
+        let hit: Option<i64> = sqlx::query_scalar(&state.db.format_query(
+            "SELECT l.binding_id FROM asset_binding_levels l \
+             JOIN upstream_asset_bindings b ON b.id = l.binding_id \
+             LEFT JOIN channel_configs c ON c.id = b.channel_config_id \
+             WHERE l.level_id = ? AND b.is_active = 1 AND COALESCE(c.status, 1) = 1 \
+             ORDER BY l.binding_id LIMIT 1",
+        ))
+        .bind(lid)
+        .fetch_optional(&state.db.pool)
+        .await
+        .map_err(|e| AppError::Internal(format!("查询等级素材映射失败: {e}")))?;
+        if let Some(bid) = hit {
+            tracing::info!(
+                "[UarRoute] 等级映射命中 用户={} 分组={} 等级#{} 绑定#{}",
+                user_id,
+                ug.user_group,
+                lid,
+                bid
+            );
+            return Ok(Some(bid));
+        }
+    }
+
+    // ── 二级：默认绑定 ──
+    let default_hit: Option<i64> = sqlx::query_scalar(&state.db.format_query(
+        "SELECT b.id FROM upstream_asset_bindings b \
+         LEFT JOIN channel_configs c ON c.id = b.channel_config_id \
+         WHERE b.is_default = 1 AND b.is_active = 1 AND COALESCE(c.status, 1) = 1 \
+         ORDER BY b.id LIMIT 1",
+    ))
+    .fetch_optional(&state.db.pool)
+    .await
+    .map_err(|e| AppError::Internal(format!("查询默认素材绑定失败: {e}")))?;
+    if let Some(bid) = default_hit {
+        tracing::info!(
+            "[UarRoute] 默认绑定命中 用户={} 分组={} 绑定#{}",
+            user_id,
+            ug.user_group,
+            bid
+        );
+        return Ok(Some(bid));
+    }
+
+    // ── 三级：channels 兼容层（过渡，配好等级映射后可删）──
     #[derive(sqlx::FromRow)]
     struct PresetRow {
         preset_id: Option<i64>,
         name: String,
+        exclude_user_groups: String,
     }
-    // 分组→优先级：选渠语义与 router::select_channel 的 user_groups LIKE 匹配保持一致
-    // 先把格式化后的 SQL 绑到局部变量，避免 format_query 返回的临时 String 被 query_as 借用后提前释放（E0716）
+    // 选渠语义与 router::select_channel 的 user_groups LIKE 匹配保持一致。
+    // 先把格式化后的 SQL 绑到局部变量，避免 format_query 返回的临时 String 被借用后提前释放（E0716）
     let preset_sql = state.db.format_query(
-        "SELECT preset_id, name FROM channels \
+        "SELECT preset_id, name, exclude_user_groups FROM channels \
          WHERE status = 1 AND preset_id IS NOT NULL \
          AND (user_groups LIKE ? OR user_groups LIKE ? OR user_groups = '[]') \
          ORDER BY priority DESC, id",
@@ -605,10 +659,21 @@ async fn resolve_default_asset_binding(state: &AppState, user_id: &str) -> Optio
     q = q.bind(format!("%\"{}\"%", ug.level_id.unwrap_or_default()));
     let candidates = q.fetch_all(&state.db.pool).await.unwrap_or_default();
 
-    // 按优先级依次找绑定；首个无绑定的 preset 自动创建（素材路径留空 = 根路径收 ?Action=）
-    let mut first_no_binding: Option<&PresetRow> = None;
     for row in &candidates {
         let Some(pid) = row.preset_id else { continue };
+        // 黑名单过滤：与 router::select_channel 同款语义（按分组名或等级 ID 匹配）
+        let excludes: Vec<String> =
+            serde_json::from_str(&row.exclude_user_groups).unwrap_or_default();
+        if !excludes.is_empty()
+            && (excludes.contains(&ug.user_group) || excludes.contains(&level_id_str))
+        {
+            tracing::debug!(
+                "[UarRoute] 渠道#{}({}) 命中 exclude_user_groups，跳过",
+                pid,
+                row.name
+            );
+            continue;
+        }
         let found: Option<i64> = sqlx::query_scalar(&state.db.format_query(
             "SELECT id FROM upstream_asset_bindings WHERE channel_config_id = ? AND is_active = 1 ORDER BY id LIMIT 1",
         ))
@@ -618,58 +683,40 @@ async fn resolve_default_asset_binding(state: &AppState, user_id: &str) -> Optio
         .unwrap_or(None);
         if let Some(bid) = found {
             tracing::info!(
-                "[UarDefault] 默认路由命中 用户={} 分组={} 渠道#{} 绑定#{}",
+                "[UarRoute] 渠道兼容层命中 用户={} 分组={} 渠道#{}({}) 绑定#{}",
                 user_id,
                 ug.user_group,
                 pid,
+                row.name,
                 bid
             );
-            return Some(bid);
-        }
-        if first_no_binding.is_none() {
-            first_no_binding = Some(row);
+            return Ok(Some(bid));
         }
     }
 
-    if let Some(row) = first_no_binding {
-        if let Some(pid) = row.preset_id {
-            let name = format!("{}-素材透传", row.name);
-            match sqlx::query_scalar::<_, i64>(&state.db.format_query(
-                "INSERT INTO upstream_asset_bindings (name, channel_config_id, asset_base_path, remark) \
-                 VALUES (?, ?, '', '按用户分组默认路由自动创建') RETURNING id",
-            ))
-            .bind(&name)
-            .bind(pid)
-            .fetch_one(&state.db.pool)
-            .await
-            {
-                Ok(bid) => {
-                    tracing::info!(
-                        "[UarDefault] 自动创建绑定#{} 用户={} 分组={} 渠道#{}({})",
-                        bid,
-                        user_id,
-                        ug.user_group,
-                        pid,
-                        row.name
-                    );
-                    return Some(bid);
-                }
-                Err(e) => {
-                    tracing::warn!("[UarDefault] 自动创建绑定失败 渠道#{}: {}", pid, e);
-                }
-            }
-        }
-    }
-
-    // 兜底：分组未命中任何渠道时，取任一条启用绑定（渠道须启用）
-    sqlx::query_scalar(&state.db.format_query(
-        "SELECT b.id FROM upstream_asset_bindings b \
-         LEFT JOIN channel_configs c ON c.id = b.channel_config_id \
-         WHERE b.is_active = 1 AND COALESCE(c.status, 1) = 1 ORDER BY b.id LIMIT 1",
-    ))
-    .fetch_optional(&state.db.pool)
+    // ── 四级：区分「平台未启用素材透传」与「配置不全」──
+    let total: i64 = sqlx::query_scalar(
+        &state
+            .db
+            .format_query("SELECT COUNT(*) FROM upstream_asset_bindings"),
+    )
+    .fetch_one(&state.db.pool)
     .await
-    .unwrap_or(None)
+    .unwrap_or(0);
+    if total == 0 {
+        // 全库无绑定 = 平台未使用素材透传，回落原有分支（商业插件路径）保持旧行为
+        return Ok(None);
+    }
+    tracing::warn!(
+        "[UarRoute] 未解析到素材上游 用户={} 分组={} 等级={} 库内绑定数={}",
+        user_id,
+        ug.user_group,
+        level_id_str,
+        total
+    );
+    Err(AppError::BadRequest(
+        "当前用户等级未配置素材上游，请联系管理员在【渠道管理 → 上游素材绑定】中为该等级指定绑定，或设置一条默认绑定".into(),
+    ))
 }
 
 pub async fn ark_asset_proxy(
@@ -689,9 +736,10 @@ pub async fn ark_asset_proxy(
         };
         return ark_asset_upstream_passthrough(&state, &token, &params, body, binding_id).await;
     }
-    // 默认透传路由：未传 ns（火山官方文档式调用）或传其他 ns 时，按用户分组→渠道优先级自动选绑定透传；
-    // 平台未配置任何素材渠道时解析为 None，回落到原有分支保持旧行为（报插件未安装）
-    if let Some(binding_id) = resolve_default_asset_binding(&state, &token.user_id).await {
+    // 默认透传路由：未传 ns（火山官方文档式调用）或传其他 ns 时，
+    // 按「等级映射 → 默认绑定 → 渠道兼容层」解析；解析失败直接报错（不再静默回落）。
+    // 仅当平台一条绑定都没配时返回 None，回落原有分支保持旧行为（商业插件路径）
+    if let Some(binding_id) = resolve_default_asset_binding(&state, &token.user_id).await? {
         return ark_asset_upstream_passthrough(&state, &token, &params, body, binding_id).await;
     }
     #[cfg(feature = "commercial_plugins")]

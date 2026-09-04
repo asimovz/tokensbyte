@@ -1,3 +1,4 @@
+40c7676e851a947965894e20b80d0545866e1e7f40c7676asimovz2026-09-03 15:34:13feat(relay): 上游素材接口协议描述符(asset_api_profile)引擎与配置化适配
 243546c65c2ea6fc049c28de9668a5090cbf7761243546casimovz2026-08-31 19:02:53feat(models): 转发规则组合支持多选挂载
 a4c5fd8b458c7565bcfc6629c47e3f2ee92e11d6a4c5fd8asimovz2026-08-28 14:52:03feat(custom): 活体认证两接口透传白名单(已上线验证);归拢工作区存量定制改动;忽略构建产物与临时目录
 fdf89d867c5512e795deb14c77a0e2d0b88fbb12fdf89d8asimovz2026-08-28 14:52:03chore: 统一换行符为 LF (.gitattributes + 全库归一化),消除跨平台同步噪音
@@ -7,4 +8,3 @@ fdf89d867c5512e795deb14c77a0e2d0b88fbb12fdf89d8asimovz2026-08-28 14:52:03cho
 c5a613779b51a209e9850ee0610a95c8cc464293c5a6137asimovz2026-08-27 16:10:51fix(relay): 补回 body_transform 转换引擎(7570c99 上传时文件内容被旧版覆盖,导致编译产物缺失该功能)
 1afee888d2e3f18177142e0b31e9c80de70062541afee88tokensbyte-deploy2026-08-27 09:57:44feat(asset): 素材透传默认路由(按用户组→优先级自动选绑,可自动建绑定)+绑定管理CRUD接口+前端上游素材绑定页面; 修复native.rs format_query临时值E0716
 a54b56e5f462e0b30f4a51b0a18242cd4b2d5fcea54b56etokensbyte-deploy2026-08-27 03:01:23feat(relay): /api 素材接口新增 uar:<绑定ID> 上游透传分支（Bearer 透传，凭证读 upstream_asset_bindings+channel_configs，复用用户隔离/归属/日志；原 asset_manager AK/SK 分支不变）
-7570c99bf9e3f941ed13730ad10b41781435cfc07570c99tokensbyte-deploy2026-08-25 10:26:54feat(relay): forward_rules config_json 新增 body_transform 声明式请求体转换（7 种指令: rename/move/template/cast/set/default/delete，支持点路径嵌套，页面可配置适配异构上游）

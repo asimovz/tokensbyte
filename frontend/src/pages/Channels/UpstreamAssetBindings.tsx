@@ -5,7 +5,7 @@
  * @license        MIT (https://www.tokensbyte.ai/)
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Table, Button, Space, Modal, Form, Input, Select, Switch, message, Popconfirm, Card, Typography, Tag, Tooltip } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, ApiOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
@@ -20,6 +20,10 @@ interface BindingRow {
   asset_api_profile?: string | null;
   group_id?: string | null;
   is_active: number;
+  /** 1 = 默认素材上游（等级未命中映射时兜底） */
+  is_default?: number;
+  /** 适用用户等级 ID 列表 */
+  level_ids?: number[];
   remark?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
@@ -32,6 +36,12 @@ interface ChannelConfigOption {
   id: number;
   name: string;
   base_url: string;
+}
+
+interface UserLevelOption {
+  id: number;
+  name: string;
+  group_key: string;
 }
 
 // 描述符示例模板：非火山上游（如平行幻帧/cmcc）的请求/响应双向适配声明，
@@ -69,6 +79,7 @@ const PROFILE_TEMPLATE = JSON.stringify({
 const UpstreamAssetBindings: React.FC = () => {
   const [bindings, setBindings] = useState<BindingRow[]>([]);
   const [channelConfigs, setChannelConfigs] = useState<ChannelConfigOption[]>([]);
+  const [levels, setLevels] = useState<UserLevelOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
   const [editing, setEditing] = useState<BindingRow | null>(null);
@@ -97,15 +108,45 @@ const UpstreamAssetBindings: React.FC = () => {
     }
   };
 
+  const fetchLevels = async () => {
+    try {
+      const resp = await (request.get('/user_levels') as unknown as Promise<{ data: UserLevelOption[] }>);
+      setLevels(resp.data || []);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   useEffect(() => {
     fetchBindings();
     fetchChannelConfigs();
+    fetchLevels();
   }, []);
+
+  // 已被其他绑定占用的等级：从下拉里排除，用交互约束杜绝「一个等级绑多个上游」。
+  // 编辑时要跳过当前绑定自身，否则它已占用的等级会消失、无法回显
+  const takenLevelIds = useMemo(() => {
+    const taken = new Set<number>();
+    bindings.forEach((b) => {
+      if (editing && b.id === editing.id) return;
+      (b.level_ids || []).forEach((lid) => taken.add(lid));
+    });
+    return taken;
+  }, [bindings, editing]);
+
+  const levelOptions = useMemo(
+    () => levels
+      .filter((l) => !takenLevelIds.has(l.id))
+      .map((l) => ({ value: l.id, label: `${l.name}（${l.group_key}）` })),
+    [levels, takenLevelIds],
+  );
+
+  const levelName = (lid: number) => levels.find((l) => l.id === lid)?.name || `#${lid}`;
 
   const openCreate = () => {
     setEditing(null);
     form.resetFields();
-    form.setFieldsValue({ asset_base_path: '', asset_api_profile: '' });
+    form.setFieldsValue({ asset_base_path: '', asset_api_profile: '', level_ids: [], is_default: false });
     setModalVisible(true);
   };
 
@@ -116,6 +157,8 @@ const UpstreamAssetBindings: React.FC = () => {
       channel_config_id: record.channel_config_id,
       asset_base_path: record.asset_base_path,
       asset_api_profile: record.asset_api_profile || '',
+      level_ids: record.level_ids || [],
+      is_default: record.is_default === 1,
       remark: record.remark || '',
     });
     setModalVisible(true);
@@ -124,12 +167,18 @@ const UpstreamAssetBindings: React.FC = () => {
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields();
+      // 多选 Select 直接产出 number[]，后端收 Vec<i64>；Switch 的 boolean 转 0/1
+      const payload = {
+        ...values,
+        level_ids: values.level_ids || [],
+        is_default: values.is_default ? 1 : 0,
+      };
       setSubmitting(true);
       if (editing) {
-        await request.put(`/upstream-asset-bindings/${editing.id}`, values);
+        await request.put(`/upstream-asset-bindings/${editing.id}`, payload);
         message.success('已更新');
       } else {
-        await request.post('/upstream-asset-bindings', values);
+        await request.post('/upstream-asset-bindings', payload);
         message.success('已创建');
       }
       setModalVisible(false);
@@ -187,7 +236,31 @@ const UpstreamAssetBindings: React.FC = () => {
     {
       title: '名称',
       dataIndex: 'name',
-      width: 150,
+      width: 170,
+      render: (v: string, record: BindingRow) => (
+        <Space size={4}>
+          <span>{v}</span>
+          {record.is_default === 1 && (
+            <Tooltip title="默认素材上游：未单独指定等级的用户全部走这条绑定">
+              <Tag color="gold">默认</Tag>
+            </Tooltip>
+          )}
+        </Space>
+      ),
+    },
+    {
+      title: '适用用户等级',
+      dataIndex: 'level_ids',
+      width: 200,
+      render: (ids?: number[]) => (ids && ids.length ? (
+        <Space size={4} wrap>
+          {ids.map((lid) => <Tag key={lid} color="geekblue">{levelName(lid)}</Tag>)}
+        </Space>
+      ) : (
+        <Tooltip title="未指定等级：该绑定不会被等级命中，只能作为默认上游或通过 ns=uar:ID 显式调用">
+          <Text type="secondary">未指定</Text>
+        </Tooltip>
+      )),
     },
     {
       title: '上游渠道',
@@ -275,7 +348,7 @@ const UpstreamAssetBindings: React.FC = () => {
           <Title level={4} style={{ marginBottom: 4 }}>上游素材绑定</Title>
           <Text type="secondary" style={{ fontSize: 13 }}>
             指定哪个上游渠道承担火山素材接口（/api?Action=CreateAsset 等）透传。
-            用户按分组/优先级命中渠道后自动路由到对应绑定；未配置时首次使用会自动创建绑定。
+            每条绑定可直接声明适用的用户等级：请求时按「等级命中 → 默认绑定」依次解析，不再依赖渠道优先级。
           </Text>
         </div>
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建绑定</Button>
@@ -287,7 +360,7 @@ const UpstreamAssetBindings: React.FC = () => {
         dataSource={bindings}
         loading={loading}
         pagination={{ pageSize: 20, showSizeChanger: true }}
-        scroll={{ x: 1000 }}
+        scroll={{ x: 1300 }}
       />
 
       <Modal
@@ -321,6 +394,29 @@ const UpstreamAssetBindings: React.FC = () => {
                 label: `${c.name}（${c.base_url}）`,
               }))}
             />
+          </Form.Item>
+          <Form.Item
+            name="level_ids"
+            label="适用用户等级"
+            extra="一个绑定可挂多个等级；已被其他绑定占用的等级不会出现在下拉里（一个等级只能走一个素材上游）。留空 = 不按等级命中，仅作为默认上游或显式 ns 调用"
+          >
+            <Select
+              mode="multiple"
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              placeholder="选择适用该绑定的用户等级（可多选）"
+              options={levelOptions}
+              notFoundContent="所有等级已被其他绑定占用"
+            />
+          </Form.Item>
+          <Form.Item
+            name="is_default"
+            label="默认素材上游"
+            valuePropName="checked"
+            extra="打开后，未单独指定等级的用户全部走这条绑定；全表只会有一条默认，设为默认会自动取消其他绑定的默认标记"
+          >
+            <Switch checkedChildren="默认" unCheckedChildren="非默认" />
           </Form.Item>
           <Form.Item
             name="asset_base_path"

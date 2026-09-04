@@ -3388,6 +3388,28 @@ macro_rules! pg_migration_blocks {
         ) WHERE key = 'site_settings'"
     );
 
+    // ── 素材透传路由解耦：绑定↔用户等级映射表 + 默认绑定标记 ──
+    // 此前素材路由复用 channels 的 user_groups/priority 选渠，导致「哪条上游服务哪些用户」
+    // 只能靠调 priority 间接表达，且 exclude_user_groups 黑名单在素材链路上未生效。
+    // 改为在【上游素材绑定】页直接声明适用等级：一个绑定可挂多个等级，
+    // 一个等级只能属于一个绑定（唯一索引硬保证，杜绝等级同时命中多条上游的排序歧义）；
+    // 未命中任何等级映射时走 is_default 的默认绑定。
+    once_migration!(pool, "asset_binding_level_route_v1",
+        r#"CREATE TABLE IF NOT EXISTS asset_binding_levels (
+            id BIGSERIAL PRIMARY KEY,
+            binding_id BIGINT NOT NULL REFERENCES upstream_asset_bindings(id) ON DELETE CASCADE,
+            level_id BIGINT NOT NULL REFERENCES user_levels(id) ON DELETE CASCADE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )"#,
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_asset_binding_levels_level ON asset_binding_levels(level_id)",
+        "CREATE INDEX IF NOT EXISTS idx_asset_binding_levels_binding ON asset_binding_levels(binding_id)",
+        "COMMENT ON TABLE asset_binding_levels IS '素材绑定↔用户等级映射：一个绑定可挂多个等级，一个等级只能属于一个绑定'",
+        "COMMENT ON COLUMN asset_binding_levels.binding_id IS 'upstream_asset_bindings.id，绑定删除时级联清理'",
+        "COMMENT ON COLUMN asset_binding_levels.level_id IS 'user_levels.id，全表唯一，等级删除时级联清理'",
+        "ALTER TABLE upstream_asset_bindings ADD COLUMN IF NOT EXISTS is_default BIGINT NOT NULL DEFAULT 0",
+        "COMMENT ON COLUMN upstream_asset_bindings.is_default IS '1=默认素材上游：用户等级未命中映射时兜底；全表至多一条（应用层互斥保证）'"
+    );
+
     tracing::info!("PostgreSQL AnyPool migrations completed successfully");
     Ok(())
     }};
