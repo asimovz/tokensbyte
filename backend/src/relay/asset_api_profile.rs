@@ -267,15 +267,35 @@ pub fn transform_response(
             .and_then(|v| v.as_str())
             .unwrap_or_default();
         if actual != rs.ok_value {
+            // 错误文案字段各家上游不一：火山用 message/error，移动云系（cmcc / ecloud /
+            // 平行幻帧）用 errorMessage，另有上游用 errorMsg。逐个兜底，全缺时给出显式
+            // 占位而非空串——否则日志只剩「上游业务错误(state=FAIL): 」，无从判断故障原因。
             let msg = upstream
                 .get("message")
                 .or_else(|| upstream.get("error"))
+                .or_else(|| upstream.get("errorMessage"))
+                .or_else(|| upstream.get("errorMsg"))
                 .and_then(|v| v.as_str())
-                .unwrap_or("");
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("(上游未返回错误文案)");
+            // errorCode 可能是字符串也可能是数字，统一转成可读文本；缺省时不占位
+            let code = upstream
+                .get("errorCode")
+                .or_else(|| upstream.get("code"))
+                .filter(|v| !v.is_null())
+                .map(|v| match v {
+                    Value::String(s) => s.trim().to_string(),
+                    other => other.to_string(),
+                })
+                .filter(|s| !s.is_empty())
+                .map(|s| format!(", errorCode={s}"))
+                .unwrap_or_default();
             return Err(format!(
-                "上游业务错误({}={}): {}",
+                "上游业务错误({}={}{}): {}",
                 rs.ok_path,
                 actual,
+                code,
                 msg
             ));
         }

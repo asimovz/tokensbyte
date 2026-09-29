@@ -1157,6 +1157,8 @@ pub async fn convert_content_urls_via_upstream(
         plugin_name: &plugin_ns,
         endpoint_base: &endpoint,
         api_key: &api_key,
+        // 视频转素材流程暂用渠道 api_key 走 Bearer；乐信等 V4 上游的素材直连走 native passthrough
+        auth: None,
     };
 
     // 确保 GroupId

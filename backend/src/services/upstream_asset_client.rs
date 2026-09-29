@@ -36,14 +36,29 @@ fn parse_binding_id_from_ns(plugin_ns: &str) -> Option<i64> {
 }
 
 /// 拼装素材接口基础 endpoint（不含 Action/Version）。
-/// `asset_base_path` 为空时直接使用 `base_url`（去尾 `/`），禁止走 join_url("",)。
+/// - `asset_base_path` 为空：直接使用渠道 `base_url`（去尾 `/`），禁止走 join_url("",)。
+/// - `asset_base_path` 是绝对 URL（`http://` / `https://` 开头）：直接作为 endpoint，
+///   原样保留（含尾斜杠——乐信素材路径 `/assets/` 必须带尾 `/`），不与 `base_url` 拼接。
+///   用于素材域名与模型域名分离的上游（如乐信
+///   视频 `https://api.591ll.com/ai/api` / 素材 `https://mintel.591ll.com/render/api`），
+///   凭证仍取自同一渠道配置。join_url 是纯字符串拼接、不识别绝对 URL，
+///   不在此前置拦住会拼出 `.../ai/api/https:/mintel...` 这种静默 404 的地址。
+/// - 其余情况：按相对路径拼在 `base_url` 之后。
 pub fn build_asset_endpoint(base_url: &str, asset_base_path: &str) -> String {
     let path = asset_base_path.trim();
     if path.is_empty() {
-        base_url.trim_end_matches('/').to_string()
-    } else {
-        join_url(base_url, path)
+        return base_url.trim_end_matches('/').to_string();
     }
+    if is_absolute_url(path) {
+        return path.to_string();
+    }
+    join_url(base_url, path)
+}
+
+/// 判定 `asset_base_path` 是否已写成绝对 URL（大小写不敏感，避开 `HTTPS://` 绕过）
+pub fn is_absolute_url(path: &str) -> bool {
+    let lower = path.trim().to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
 }
 
 /// 在 endpoint 上追加 Action/Version；若已有 query 则用 `&`。
@@ -89,7 +104,42 @@ fn spawn_api_log(
     });
 }
 
-/// Bearer 调用上游素材 Action 所需上下文（避免过多参数）。
+/// 绑定级鉴权配置。`auth_mode` 空或 `bearer` → 用 `api_key` 走 Bearer（存量默认）；
+/// `volc_v4` → 用 AK/SK 做火山 Signature V4（复用 volcengine_sign），供乐信等
+/// 以 ark V4 鉴权、域名却非火山官方的上游。region/service 空时默认 cn-beijing / ark。
+#[derive(Clone, Debug, Default)]
+pub struct BindingAuth {
+    pub auth_mode: String,
+    pub api_key: String,
+    pub access_key: String,
+    pub secret_key: String,
+    pub sign_region: String,
+    pub sign_service: String,
+}
+
+impl BindingAuth {
+    pub fn is_v4(&self) -> bool {
+        self.auth_mode.eq_ignore_ascii_case("volc_v4")
+    }
+    fn region(&self) -> &str {
+        let r = self.sign_region.trim();
+        if r.is_empty() { "cn-beijing" } else { r }
+    }
+    fn service(&self) -> &str {
+        let s = self.sign_service.trim();
+        if s.is_empty() { "ark" } else { s }
+    }
+}
+
+/// load_binding_endpoints 的单绑定结果：endpoint + 鉴权配置。
+#[derive(Clone, Debug)]
+pub struct BindingEndpoint {
+    pub endpoint: String,
+    pub auth: BindingAuth,
+}
+
+/// Bearer / V4 调用上游素材 Action 所需上下文（避免过多参数）。
+/// `auth` 为 None 或 bearer 模式时走 Bearer（api_key）；volc_v4 时走 AK/SK 签名。
 pub struct UpstreamCallCtx<'a> {
     pub http: &'a reqwest::Client,
     pub db: &'a crate::db::Database,
@@ -97,6 +147,49 @@ pub struct UpstreamCallCtx<'a> {
     pub plugin_name: &'a str,
     pub endpoint_base: &'a str,
     pub api_key: &'a str,
+    pub auth: Option<&'a BindingAuth>,
+}
+
+/// 按鉴权模式给请求 builder 施加鉴权头。
+/// volc_v4：解析 url 得 host/path/query，对 (method, url, body_bytes) 计算火山 V4 签名，
+/// payload_hash 与实际发送 body 字节严格一致（调用方须用同一 bytes 作为 body）；
+/// 否则回退 Bearer。Content-Type 由调用方设置（V4 canonical_headers 依赖 application/json）。
+fn apply_auth(
+    builder: reqwest::RequestBuilder,
+    method: &reqwest::Method,
+    url: &str,
+    body_bytes: &[u8],
+    ctx: &UpstreamCallCtx<'_>,
+) -> Result<reqwest::RequestBuilder> {
+    if let Some(a) = ctx.auth {
+        if a.is_v4() {
+            let parsed = reqwest::Url::parse(url)
+                .map_err(|e| anyhow!("上游素材 URL 解析失败: {} - {}", e, url))?;
+            let host = match parsed.port() {
+                Some(p) => format!("{}:{}", parsed.host_str().unwrap_or_default(), p),
+                None => parsed.host_str().unwrap_or_default().to_string(),
+            };
+            let path = parsed.path();
+            let query = parsed.query().unwrap_or("");
+            let (authorization, x_date, payload_hash) =
+                crate::services::volcengine::volcengine_sign(
+                    &a.access_key,
+                    &a.secret_key,
+                    method.as_str(),
+                    &host,
+                    path,
+                    query,
+                    a.service(),
+                    a.region(),
+                    body_bytes,
+                );
+            return Ok(builder
+                .header("X-Date", &x_date)
+                .header("X-Content-Sha256", &payload_hash)
+                .header("Authorization", authorization));
+        }
+    }
+    Ok(builder.header("Authorization", format!("Bearer {}", ctx.api_key)))
 }
 
 /// Bearer 调用上游素材 Action（带日志），返回完整 JSON。
@@ -107,15 +200,16 @@ pub async fn call_action_logged(
 ) -> Result<Value> {
     let url = append_action_query(ctx.endpoint_base, action);
     let req_payload = body.to_string();
-    let res = crate::services::http_client::with_upstream_timeout(
-        ctx.http
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", ctx.api_key))
-            .header("Content-Type", "application/json")
-            .json(body),
-    )
-    .send()
-    .await?;
+    let body_bytes = serde_json::to_vec(body).unwrap_or_default();
+    let builder = ctx
+        .http
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .body(body_bytes.clone());
+    let builder = apply_auth(builder, &reqwest::Method::POST, &url, &body_bytes, ctx)?;
+    let res = crate::services::http_client::with_upstream_timeout(builder)
+        .send()
+        .await?;
     let status_code = res.status().as_u16() as i32;
     let text = res.text().await.unwrap_or_default();
     spawn_api_log(
@@ -144,15 +238,17 @@ pub async fn call_upstream_http(
 ) -> Result<Value> {
     let url = join_url(ctx.endpoint_base, path);
     let req_payload = body.map(|b| b.to_string()).unwrap_or_default();
-    let mut builder = ctx
-        .http
-        .request(method, &url)
-        .header("Authorization", format!("Bearer {}", ctx.api_key));
-    if let Some(b) = body {
+    let body_bytes = body
+        .map(|b| serde_json::to_vec(b).unwrap_or_default())
+        .unwrap_or_default();
+    let sign_method = method.clone();
+    let mut builder = ctx.http.request(method, &url);
+    if body.is_some() {
         builder = builder
             .header("Content-Type", "application/json")
-            .json(b);
+            .body(body_bytes.clone());
     }
+    builder = apply_auth(builder, &sign_method, &url, &body_bytes, ctx)?;
     let res = crate::services::http_client::with_upstream_timeout(builder)
         .send()
         .await?;
@@ -196,14 +292,19 @@ struct BindingCredRow {
     asset_base_path: String,
     base_url: Option<String>,
     api_key: Option<String>,
+    auth_mode: Option<String>,
+    access_key: Option<String>,
+    secret_key: Option<String>,
+    sign_region: Option<String>,
+    sign_service: Option<String>,
 }
 
-/// 一次查出多个绑定的 endpoint/api_key，避免按绑定 N 次查询。
-/// 供 ark_asset_proxy uar: 透传分支复用（凭证实时读库，换上游改库即生效）。
+/// 一次查出多个绑定的 endpoint + 鉴权配置，避免按绑定 N 次查询。
+/// 供 ark_asset_proxy 上游素材透传分支复用（凭证实时读库，换上游改库即生效）。
 pub async fn load_binding_endpoints(
     db: &crate::db::Database,
     binding_ids: &[i64],
-) -> HashMap<i64, (String, String)> {
+) -> HashMap<i64, BindingEndpoint> {
     let mut out = HashMap::new();
     if binding_ids.is_empty() {
         return out;
@@ -214,7 +315,8 @@ pub async fn load_binding_endpoints(
         .collect::<Vec<_>>()
         .join(",");
     let sql = db.format_query(&format!(
-        "SELECT b.id, b.asset_base_path, c.base_url, c.api_key \
+        "SELECT b.id, b.asset_base_path, c.base_url, c.api_key, \
+                b.auth_mode, b.access_key, b.secret_key, b.sign_region, b.sign_service \
          FROM upstream_asset_bindings b \
          LEFT JOIN channel_configs c ON c.id = b.channel_config_id \
          WHERE b.id IN ({ph}) AND COALESCE(c.status, 1) = 1"
@@ -228,16 +330,31 @@ pub async fn load_binding_endpoints(
     };
     for row in rows {
         let base_url = row.base_url.unwrap_or_default();
-        let api_key = row.api_key.unwrap_or_default();
-        if base_url.trim().is_empty() || api_key.trim().is_empty() {
+        if base_url.trim().is_empty() {
+            continue;
+        }
+        let auth = BindingAuth {
+            auth_mode: row.auth_mode.unwrap_or_default(),
+            api_key: row.api_key.unwrap_or_default(),
+            access_key: row.access_key.unwrap_or_default(),
+            secret_key: row.secret_key.unwrap_or_default(),
+            sign_region: row.sign_region.unwrap_or_default(),
+            sign_service: row.sign_service.unwrap_or_default(),
+        };
+        // V4 需 AK/SK；Bearer 需 api_key。缺凭证的绑定视为不可用（与旧行为一致：不静默 401）
+        if auth.is_v4() {
+            if auth.access_key.trim().is_empty() || auth.secret_key.trim().is_empty() {
+                continue;
+            }
+        } else if auth.api_key.trim().is_empty() {
             continue;
         }
         out.insert(
             row.id,
-            (
-                build_asset_endpoint(&base_url, &row.asset_base_path),
-                api_key,
-            ),
+            BindingEndpoint {
+                endpoint: build_asset_endpoint(&base_url, &row.asset_base_path),
+                auth,
+            },
         );
     }
     out
@@ -248,6 +365,7 @@ struct UpstreamDeleteJob {
     plugin_ns: String,
     endpoint: String,
     api_key: String,
+    auth: BindingAuth,
     asset_ids: Vec<String>,
 }
 
@@ -324,7 +442,7 @@ async fn prepare_delete_jobs(
     let creds = load_binding_endpoints(db, &binding_ids).await;
     let mut jobs = Vec::with_capacity(ns_binding.len());
     for (ns, binding_id, aids) in ns_binding {
-        let Some((endpoint, api_key)) = creds.get(&binding_id).cloned() else {
+        let Some(be) = creds.get(&binding_id).cloned() else {
             tracing::info!(
                 "[UpstreamAsset] DeleteAsset 跳过: 绑定#{} 渠道凭证不可用 ({} 个)",
                 binding_id,
@@ -335,8 +453,9 @@ async fn prepare_delete_jobs(
         jobs.push(UpstreamDeleteJob {
             binding_id,
             plugin_ns: ns,
-            endpoint,
-            api_key,
+            api_key: be.auth.api_key.clone(),
+            endpoint: be.endpoint,
+            auth: be.auth,
             asset_ids: aids.into_iter().collect(),
         });
     }
@@ -360,6 +479,7 @@ async fn run_delete_jobs(
             plugin_name: &job.plugin_ns,
             endpoint_base: &job.endpoint,
             api_key: &job.api_key,
+            auth: Some(&job.auth),
         };
         for aid in job.asset_ids {
             if !first {

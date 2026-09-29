@@ -416,7 +416,7 @@ const ARK_PASSTHROUGH_EXTRA_ACTIONS: &[&str] = &[
     "GetVisualValidateResult",
 ];
 
-// 以下隔离辅助函数为纯 DB/JSON 逻辑，同时服务于商业分支与 uar: 透传分支，解除门控（逻辑零改动）
+// 以下隔离辅助函数为纯 DB/JSON 逻辑，同时服务于商业分支与上游素材透传分支，解除门控（逻辑零改动）
 /// 加载当前用户在本插件命名空间下拥有的 Ark 资源 ID 集合
 async fn load_owned_ark_ids(
     state: &AppState,
@@ -562,17 +562,19 @@ async fn ensure_ark_owned_or_claim(
     Ok(())
 }
 
-/// 素材透传绑定解析（自上而下，命中即返回）：
-/// 1. 用户等级 → `asset_binding_levels` 精确映射（管理员在【上游素材绑定】页配置）
-/// 2. `is_default = 1` 的默认绑定（未单独配置的普通用户走这里）
-/// 3. 兼容旧配置：`channels` 的 user_groups/priority 选渠（已补齐 exclude_user_groups 黑名单）
-/// 4. 全库无任何绑定 → `Ok(None)` 回落原有分支；有绑定却都没命中 → 明确报错
+/// 素材透传绑定解析：**只认**用户等级 → `asset_binding_levels` 精确映射。
 ///
-/// 第 3 级是过渡兼容层：等级映射与默认绑定配好后就不会再走到，稳定后可整段删除。
-/// 旧实现在这一层有两个问题：一是没取 exclude_user_groups（字段压根不在 SELECT 里），
-/// 导致高 priority 的纯 LLM 渠道行会劫持素材请求，只能靠把目标渠道 priority 调到 100 绕过；
-/// 二是首个无绑定的渠道会被自动 INSERT 一条绑定，可能给纯文本 LLM 网关凭空造出素材上游。
-async fn resolve_default_asset_binding(
+/// 命中且绑定与其上游渠道均启用 → `Ok(Some(binding_id))`；
+/// 平台一条绑定都没配 → `Ok(None)`，回落商业插件分支保持旧行为；
+/// 有绑定但当前用户等级未被覆盖 → 明确 400，不做任何静默兜底。
+///
+/// 历史上这里还有两级兜底，均已移除：
+/// - `is_default = 1` 的默认绑定：会让未映射等级的用户静默走到某一条上游，
+///   界面无任何异常表征，只能靠上游账单反查；
+/// - `channels` 的 user_groups/priority 兼容层：与等级映射语义重叠，且
+///   `ORDER BY id LIMIT 1` 使同渠道多绑定只命中最小 id、无绑定渠道会被自动
+///   INSERT 出一条绑定（可能给纯文本 LLM 网关凭空造出素材上游）。
+async fn resolve_asset_binding(
     state: &AppState,
     user_id: &str,
 ) -> Result<Option<i64>, AppError> {
@@ -619,82 +621,7 @@ async fn resolve_default_asset_binding(
         }
     }
 
-    // ── 二级：默认绑定 ──
-    let default_hit: Option<i64> = sqlx::query_scalar(&state.db.format_query(
-        "SELECT b.id FROM upstream_asset_bindings b \
-         LEFT JOIN channel_configs c ON c.id = b.channel_config_id \
-         WHERE b.is_default = 1 AND b.is_active = 1 AND COALESCE(c.status, 1) = 1 \
-         ORDER BY b.id LIMIT 1",
-    ))
-    .fetch_optional(&state.db.pool)
-    .await
-    .map_err(|e| AppError::Internal(format!("查询默认素材绑定失败: {e}")))?;
-    if let Some(bid) = default_hit {
-        tracing::info!(
-            "[UarRoute] 默认绑定命中 用户={} 分组={} 绑定#{}",
-            user_id,
-            ug.user_group,
-            bid
-        );
-        return Ok(Some(bid));
-    }
-
-    // ── 三级：channels 兼容层（过渡，配好等级映射后可删）──
-    #[derive(sqlx::FromRow)]
-    struct PresetRow {
-        preset_id: Option<i64>,
-        name: String,
-        exclude_user_groups: String,
-    }
-    // 选渠语义与 router::select_channel 的 user_groups LIKE 匹配保持一致。
-    // 先把格式化后的 SQL 绑到局部变量，避免 format_query 返回的临时 String 被借用后提前释放（E0716）
-    let preset_sql = state.db.format_query(
-        "SELECT preset_id, name, exclude_user_groups FROM channels \
-         WHERE status = 1 AND preset_id IS NOT NULL \
-         AND (user_groups LIKE ? OR user_groups LIKE ? OR user_groups = '[]') \
-         ORDER BY priority DESC, id",
-    );
-    let mut q = sqlx::query_as::<_, PresetRow>(&preset_sql);
-    q = q.bind(format!("%\"{}\"%", ug.user_group));
-    q = q.bind(format!("%\"{}\"%", ug.level_id.unwrap_or_default()));
-    let candidates = q.fetch_all(&state.db.pool).await.unwrap_or_default();
-
-    for row in &candidates {
-        let Some(pid) = row.preset_id else { continue };
-        // 黑名单过滤：与 router::select_channel 同款语义（按分组名或等级 ID 匹配）
-        let excludes: Vec<String> =
-            serde_json::from_str(&row.exclude_user_groups).unwrap_or_default();
-        if !excludes.is_empty()
-            && (excludes.contains(&ug.user_group) || excludes.contains(&level_id_str))
-        {
-            tracing::debug!(
-                "[UarRoute] 渠道#{}({}) 命中 exclude_user_groups，跳过",
-                pid,
-                row.name
-            );
-            continue;
-        }
-        let found: Option<i64> = sqlx::query_scalar(&state.db.format_query(
-            "SELECT id FROM upstream_asset_bindings WHERE channel_config_id = ? AND is_active = 1 ORDER BY id LIMIT 1",
-        ))
-        .bind(pid)
-        .fetch_optional(&state.db.pool)
-        .await
-        .unwrap_or(None);
-        if let Some(bid) = found {
-            tracing::info!(
-                "[UarRoute] 渠道兼容层命中 用户={} 分组={} 渠道#{}({}) 绑定#{}",
-                user_id,
-                ug.user_group,
-                pid,
-                row.name,
-                bid
-            );
-            return Ok(Some(bid));
-        }
-    }
-
-    // ── 四级：区分「平台未启用素材透传」与「配置不全」──
+    // ── 二级：区分「平台未启用素材透传」与「等级未被映射覆盖」──
     let total: i64 = sqlx::query_scalar(
         &state
             .db
@@ -715,7 +642,7 @@ async fn resolve_default_asset_binding(
         total
     );
     Err(AppError::BadRequest(
-        "当前用户等级未配置素材上游，请联系管理员在【渠道管理 → 上游素材绑定】中为该等级指定绑定，或设置一条默认绑定".into(),
+        "当前用户未匹配到素材上游：请确认该用户已归属某个用户等级，且管理员已在【渠道管理 → 上游素材绑定】中为该等级指定绑定".into(),
     ))
 }
 
@@ -725,21 +652,11 @@ pub async fn ark_asset_proxy(
     Query(params): Query<HashMap<String, String>>,
     Json(mut body): Json<serde_json::Value>,
 ) -> AppResult<Response> {
-    // ns=uar:<绑定ID>：上游渠道素材接口透传分支（Bearer 透传，不依赖商业 feature）；
-    // 其余情况先尝试默认透传路由，解析不到绑定才落入下方原有分支，行为向后兼容
-    if let Some(rest) = params.get("ns").and_then(|s| s.strip_prefix("uar:")) {
-        let Some(binding_id) = rest.parse::<i64>().ok().filter(|id| *id > 0) else {
-            return Err(AppError::BadRequest(format!(
-                "无效的上游素材绑定 ns: uar:{}",
-                rest
-            )));
-        };
-        return ark_asset_upstream_passthrough(&state, &token, &params, body, binding_id).await;
-    }
-    // 默认透传路由：未传 ns（火山官方文档式调用）或传其他 ns 时，
-    // 按「等级映射 → 默认绑定 → 渠道兼容层」解析；解析失败直接报错（不再静默回落）。
-    // 仅当平台一条绑定都没配时返回 None，回落原有分支保持旧行为（商业插件路径）
-    if let Some(binding_id) = resolve_default_asset_binding(&state, &token.user_id).await? {
+    // 上游素材透传路由：按用户等级 → 绑定映射解析，解析失败直接报错（无静默兜底）。
+    // 仅当平台一条绑定都没配时返回 None，回落下方商业插件分支保持旧行为。
+    // ns 参数不再参与路由判定（已废弃的 ns=uar:<绑定ID> 显式入口已移除），
+    // 仅在商业分支中作为插件命名空间使用（asset_manager / asset_manager_intl，火山官方取值）。
+    if let Some(binding_id) = resolve_asset_binding(&state, &token.user_id).await? {
         return ark_asset_upstream_passthrough(&state, &token, &params, body, binding_id).await;
     }
     #[cfg(feature = "commercial_plugins")]
@@ -1079,7 +996,7 @@ pub async fn ark_asset_proxy(
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  ark_asset_proxy 透传分支：ns=uar:<绑定ID>
+//  ark_asset_proxy 上游素材透传分支（按用户等级映射解析绑定）
 //  Bearer 透传到上游渠道素材接口（协议与火山官方 Assets API 一致），
 //  不使用火山 AK/SK 签名；凭证从 upstream_asset_bindings + channel_configs
 //  实时读库，换上游只需改库，无需重启。用户隔离/归属/日志复用现有体系。
@@ -1154,12 +1071,15 @@ async fn ark_asset_upstream_passthrough(
 
     // 4. 加载绑定凭证（upstream_asset_bindings JOIN channel_configs，实时读库）
     let creds = uac::load_binding_endpoints(&state.db, &[binding_id]).await;
-    let Some((endpoint_base, api_key)) = creds.get(&binding_id).cloned() else {
+    let Some(be) = creds.get(&binding_id).cloned() else {
         return Err(AppError::BadRequest(format!(
-            "上游素材绑定#{} 不存在或渠道凭证不可用（渠道未启用/缺少 base_url 或 api_key）",
+            "上游素材绑定#{} 不存在或渠道凭证不可用（渠道未启用/缺少 base_url 或对应鉴权模式的凭证）",
             binding_id
         )));
     };
+    let endpoint_base = be.endpoint;
+    let auth = be.auth;
+    let api_key = auth.api_key.clone();
 
     // 请求体预处理：Name 长度限制（与火山官方约束一致）；
     // 透传模式不强制注入 ProjectName（无系统火山配置项），由用户按官方文档自传，其余字段原样透传
@@ -1296,6 +1216,7 @@ async fn ark_asset_upstream_passthrough(
             plugin_name: &plugin_ns,
             endpoint_base: &endpoint_base,
             api_key: &api_key,
+            auth: Some(&auth),
         };
         match uac::call_upstream_http(&ctx, method, &path, up_body.as_ref()).await {
             Ok(v) => match aap::transform_response(spec, &action, &version, &v) {
@@ -1329,6 +1250,7 @@ async fn ark_asset_upstream_passthrough(
             plugin_name: &plugin_ns,
             endpoint_base: &endpoint_base,
             api_key: &api_key,
+            auth: Some(&auth),
         };
         match uac::call_action_logged(&ctx, &action, &body).await {
             Ok(v) => v,

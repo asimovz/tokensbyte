@@ -2581,6 +2581,16 @@ macro_rules! pg_migration_blocks {
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'upstream_asset_bindings' AND column_name = 'asset_api_profile') THEN ALTER TABLE upstream_asset_bindings ADD COLUMN asset_api_profile TEXT; END IF; END $$"
     );
 
+    // upstream_asset_bindings 新增绑定级鉴权列：uar 透传分支据此在 Bearer 与火山 V4 签名间切换
+    // （乐信等以 ark V4 鉴权、域名却非火山官方的上游）。默认 bearer + 空凭证，存量绑定零影响（幂等）
+    once_migration!(pool, "upstream_asset_bindings_auth_v1",
+        "ALTER TABLE upstream_asset_bindings ADD COLUMN IF NOT EXISTS auth_mode TEXT NOT NULL DEFAULT 'bearer'",
+        "ALTER TABLE upstream_asset_bindings ADD COLUMN IF NOT EXISTS access_key TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE upstream_asset_bindings ADD COLUMN IF NOT EXISTS secret_key TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE upstream_asset_bindings ADD COLUMN IF NOT EXISTS sign_region TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE upstream_asset_bindings ADD COLUMN IF NOT EXISTS sign_service TEXT NOT NULL DEFAULT ''"
+    );
+
     // ── 模型广场：补齐系统供应商与模型类型英文名称 ──
     once_migration!(pool, "model_marketplace_system_names_en_v1",
         "UPDATE model_providers SET name_en = CASE name WHEN '火山引擎' THEN 'Volcengine' WHEN '谷歌' THEN 'Google' WHEN '阿里云' THEN 'Alibaba Cloud' WHEN '腾讯云' THEN 'Tencent Cloud' WHEN '可灵 AI' THEN 'Kling AI' ELSE name_en END WHERE name_en = ''",
@@ -3392,8 +3402,10 @@ macro_rules! pg_migration_blocks {
     // 此前素材路由复用 channels 的 user_groups/priority 选渠，导致「哪条上游服务哪些用户」
     // 只能靠调 priority 间接表达，且 exclude_user_groups 黑名单在素材链路上未生效。
     // 改为在【上游素材绑定】页直接声明适用等级：一个绑定可挂多个等级，
-    // 一个等级只能属于一个绑定（唯一索引硬保证，杜绝等级同时命中多条上游的排序歧义）；
-    // 未命中任何等级映射时走 is_default 的默认绑定。
+    // 一个等级只能属于一个绑定（唯一索引硬保证，杜绝等级同时命中多条上游的排序歧义）。
+    // 【已废弃】is_default 默认绑定兜底已从路由中移除：素材渠道只由等级映射决定，
+    // 未覆盖的等级明确报错。列保留不删（与 user_levels.is_default 同名，后者是注册默认等级，
+    // 误删会导致新用户注册失败；且删列不可逆而保留零成本），应用层不再读写。
     once_migration!(pool, "asset_binding_level_route_v1",
         r#"CREATE TABLE IF NOT EXISTS asset_binding_levels (
             id BIGSERIAL PRIMARY KEY,
@@ -3407,7 +3419,7 @@ macro_rules! pg_migration_blocks {
         "COMMENT ON COLUMN asset_binding_levels.binding_id IS 'upstream_asset_bindings.id，绑定删除时级联清理'",
         "COMMENT ON COLUMN asset_binding_levels.level_id IS 'user_levels.id，全表唯一，等级删除时级联清理'",
         "ALTER TABLE upstream_asset_bindings ADD COLUMN IF NOT EXISTS is_default BIGINT NOT NULL DEFAULT 0",
-        "COMMENT ON COLUMN upstream_asset_bindings.is_default IS '1=默认素材上游：用户等级未命中映射时兜底；全表至多一条（应用层互斥保证）'"
+        "COMMENT ON COLUMN upstream_asset_bindings.is_default IS '[已废弃] 原默认素材上游兜底标记；路由已改为只认等级映射，应用层不再读写此列'"
     );
 
     tracing::info!("PostgreSQL AnyPool migrations completed successfully");

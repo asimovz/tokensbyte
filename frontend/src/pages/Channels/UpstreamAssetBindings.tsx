@@ -20,8 +20,12 @@ interface BindingRow {
   asset_api_profile?: string | null;
   group_id?: string | null;
   is_active: number;
-  /** 1 = 默认素材上游（等级未命中映射时兜底） */
-  is_default?: number;
+  /** 鉴权模式：bearer（默认，渠道 API Key）/ volc_v4（火山 V4 签名 AK/SK） */
+  auth_mode?: string | null;
+  /** V4 签名 AccessKey（SecretKey 出于安全不回传） */
+  access_key?: string | null;
+  sign_region?: string | null;
+  sign_service?: string | null;
   /** 适用用户等级 ID 列表 */
   level_ids?: number[];
   remark?: string | null;
@@ -146,7 +150,10 @@ const UpstreamAssetBindings: React.FC = () => {
   const openCreate = () => {
     setEditing(null);
     form.resetFields();
-    form.setFieldsValue({ asset_base_path: '', asset_api_profile: '', level_ids: [], is_default: false });
+    form.setFieldsValue({
+      asset_base_path: '', asset_api_profile: '', level_ids: [],
+      auth_mode: 'bearer', access_key: '', secret_key: '', sign_region: '', sign_service: '',
+    });
     setModalVisible(true);
   };
 
@@ -157,8 +164,13 @@ const UpstreamAssetBindings: React.FC = () => {
       channel_config_id: record.channel_config_id,
       asset_base_path: record.asset_base_path,
       asset_api_profile: record.asset_api_profile || '',
+      auth_mode: record.auth_mode || 'bearer',
+      access_key: record.access_key || '',
+      // SecretKey 不回显：留空 = 不修改（提交时剔除该字段）
+      secret_key: '',
+      sign_region: record.sign_region || '',
+      sign_service: record.sign_service || '',
       level_ids: record.level_ids || [],
-      is_default: record.is_default === 1,
       remark: record.remark || '',
     });
     setModalVisible(true);
@@ -167,12 +179,15 @@ const UpstreamAssetBindings: React.FC = () => {
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields();
-      // 多选 Select 直接产出 number[]，后端收 Vec<i64>；Switch 的 boolean 转 0/1
-      const payload = {
+      // 多选 Select 直接产出 number[]，后端收 Vec<i64>
+      const payload: any = {
         ...values,
         level_ids: values.level_ids || [],
-        is_default: values.is_default ? 1 : 0,
       };
+      // 编辑时 SecretKey 留空 = 不修改（后端 None 保留原值）；空串会被后端当作清空，故剔除
+      if (editing && !payload.secret_key) {
+        delete payload.secret_key;
+      }
       setSubmitting(true);
       if (editing) {
         await request.put(`/upstream-asset-bindings/${editing.id}`, payload);
@@ -237,16 +252,7 @@ const UpstreamAssetBindings: React.FC = () => {
       title: '名称',
       dataIndex: 'name',
       width: 170,
-      render: (v: string, record: BindingRow) => (
-        <Space size={4}>
-          <span>{v}</span>
-          {record.is_default === 1 && (
-            <Tooltip title="默认素材上游：未单独指定等级的用户全部走这条绑定">
-              <Tag color="gold">默认</Tag>
-            </Tooltip>
-          )}
-        </Space>
-      ),
+      render: (v: string) => <span>{v}</span>,
     },
     {
       title: '适用用户等级',
@@ -257,7 +263,7 @@ const UpstreamAssetBindings: React.FC = () => {
           {ids.map((lid) => <Tag key={lid} color="geekblue">{levelName(lid)}</Tag>)}
         </Space>
       ) : (
-        <Tooltip title="未指定等级：该绑定不会被等级命中，只能作为默认上游或通过 ns=uar:ID 显式调用">
+        <Tooltip title="未指定等级：该绑定不会被 /api?Action= 素材请求命中（素材路由只按用户等级解析）；仍可用于视频生成转发规则显式指定">
           <Text type="secondary">未指定</Text>
         </Tooltip>
       )),
@@ -276,10 +282,10 @@ const UpstreamAssetBindings: React.FC = () => {
       ),
     },
     {
-      title: '素材接口路径',
+      title: '素材接口地址',
       dataIndex: 'asset_base_path',
-      width: 150,
-      render: (v: string) => (v ? <Text code>{v}</Text> : <Text type="secondary">根路径（?Action= 直收）</Text>),
+      width: 220,
+      render: (v: string) => (v ? <Text code>{v}</Text> : <Text type="secondary">跟随渠道 base_url</Text>),
     },
     {
       title: '协议适配',
@@ -292,6 +298,20 @@ const UpstreamAssetBindings: React.FC = () => {
       ) : (
         <Tooltip title="未配置描述符，按火山官方素材协议直接透传">
           <Text type="secondary">火山直透</Text>
+        </Tooltip>
+      )),
+    },
+    {
+      title: '鉴权',
+      dataIndex: 'auth_mode',
+      width: 100,
+      render: (v: string | null | undefined, record: BindingRow) => ((v || 'bearer') === 'volc_v4' ? (
+        <Tooltip title={`火山 V4 签名（AK: ${record.access_key || '-'}，Region: ${record.sign_region || 'cn-beijing'}，Service: ${record.sign_service || 'ark'}）`}>
+          <Tag color="purple">V4 签名</Tag>
+        </Tooltip>
+      ) : (
+        <Tooltip title="Bearer：使用渠道配置的 API Key">
+          <Text type="secondary">Bearer</Text>
         </Tooltip>
       )),
     },
@@ -396,9 +416,51 @@ const UpstreamAssetBindings: React.FC = () => {
             />
           </Form.Item>
           <Form.Item
+            name="auth_mode"
+            label="鉴权模式"
+            initialValue="bearer"
+            extra="Bearer：用渠道配置的 API Key（存量默认）；火山 V4 签名：用 AK/SK 对请求做 Signature V4（乐信等以 ark 协议鉴权、域名非火山官方的上游；Region 默认 cn-beijing，Service 默认 ark）"
+          >
+            <Select
+              options={[
+                { value: 'bearer', label: 'Bearer（渠道 API Key）' },
+                { value: 'volc_v4', label: '火山 V4 签名（AK/SK）' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(prev, cur) => prev.auth_mode !== cur.auth_mode}>
+            {({ getFieldValue }) => (getFieldValue('auth_mode') === 'volc_v4' ? (
+              <>
+                <Form.Item
+                  name="access_key"
+                  label="AccessKey"
+                  rules={[{ required: true, message: '请输入 AccessKey' }]}
+                >
+                  <Input placeholder="V4 签名 AccessKey" maxLength={128} autoComplete="off" />
+                </Form.Item>
+                <Form.Item
+                  name="secret_key"
+                  label="SecretKey"
+                  rules={editing ? [] : [{ required: true, message: '请输入 SecretKey' }]}
+                  extra="出于安全不回显：编辑时留空 = 保留原值，填写 = 覆盖"
+                >
+                  <Input.Password placeholder="V4 签名 SecretKey" maxLength={128} autoComplete="new-password" />
+                </Form.Item>
+                <Space style={{ display: 'flex' }} align="start">
+                  <Form.Item name="sign_region" label="签名 Region" initialValue="cn-beijing">
+                    <Input placeholder="cn-beijing" maxLength={64} />
+                  </Form.Item>
+                  <Form.Item name="sign_service" label="签名 Service" initialValue="ark">
+                    <Input placeholder="ark" maxLength={64} />
+                  </Form.Item>
+                </Space>
+              </>
+            ) : null)}
+          </Form.Item>
+          <Form.Item
             name="level_ids"
             label="适用用户等级"
-            extra="一个绑定可挂多个等级；已被其他绑定占用的等级不会出现在下拉里（一个等级只能走一个素材上游）。留空 = 不按等级命中，仅作为默认上游或显式 ns 调用"
+            extra="一个绑定可挂多个等级；已被其他绑定占用的等级不会出现在下拉里（一个等级只能走一个素材上游）。留空 = 该绑定不会被素材请求命中，仅用于视频生成链路显式指定"
           >
             <Select
               mode="multiple"
@@ -411,19 +473,18 @@ const UpstreamAssetBindings: React.FC = () => {
             />
           </Form.Item>
           <Form.Item
-            name="is_default"
-            label="默认素材上游"
-            valuePropName="checked"
-            extra="打开后，未单独指定等级的用户全部走这条绑定；全表只会有一条默认，设为默认会自动取消其他绑定的默认标记"
-          >
-            <Switch checkedChildren="默认" unCheckedChildren="非默认" />
-          </Form.Item>
-          <Form.Item
             name="asset_base_path"
-            label="素材接口路径"
-            extra="拼接在渠道 base_url 之后；留空表示上游在根路径直接接收 ?Action=（如 https://xxx/ark/?Action=... 则留空）"
+            label="素材接口地址"
+            extra="留空 = 与渠道 base_url 同域；填相对路径（如 /ark）= 拼在 base_url 之后；填完整 URL（如 https://mintel.591ll.com/render/api）= 素材域名与视频域名分离，API Key 仍取自该渠道配置"
+            rules={[{
+              validator: (_, value: string) => {
+                const v = (value ?? '').trim();
+                if (!v || v.startsWith('/') || /^https?:\/\//i.test(v)) return Promise.resolve();
+                return Promise.reject(new Error('请填写以 / 开头的相对路径，或以 http:// / https:// 开头的完整地址'));
+              },
+            }]}
           >
-            <Input placeholder="留空 = 根路径；否则填如 /ark" maxLength={255} />
+            <Input placeholder="留空 / /ark / https://素材域名/路径" maxLength={255} />
           </Form.Item>
           <Form.Item
             name="asset_api_profile"

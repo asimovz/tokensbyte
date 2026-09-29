@@ -8,7 +8,7 @@
 //! 上游素材绑定管理（upstream_asset_bindings CRUD + 连通性测试）
 //!
 //! 绑定 = 指定哪个上游渠道承担素材接口透传（凭证读 channel_configs，绑定只存指针与素材路径后缀）。
-//! 供 /api?Action= 透传分支（ns=uar:N / 等级映射 / 默认绑定）与视频生成素材转换共用。
+//! 供 /api?Action= 透传分支（按用户等级映射解析绑定）与视频生成素材转换共用。
 //!
 //! 适用等级（asset_binding_levels）在本页配置：一个绑定可挂多个等级，一个等级只能属于一个绑定。
 //! 唯一性除 DB 唯一索引外，入口再做一次占用校验，以便返回「被哪条绑定占用」的可读提示。
@@ -23,7 +23,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 const BINDING_SELECT: &str = "SELECT b.id, b.name, b.channel_config_id, b.asset_base_path, \
-     b.asset_api_profile, b.group_id, b.is_active, b.is_default, b.remark, \
+     b.asset_api_profile, b.group_id, b.is_active, b.remark, \
+     b.auth_mode, b.access_key, b.sign_region, b.sign_service, \
      b.created_at::text AS created_at, b.updated_at::text AS updated_at, \
      c.name AS channel_name, c.base_url AS channel_base_url, c.status AS channel_status \
      FROM upstream_asset_bindings b LEFT JOIN channel_configs c ON c.id = b.channel_config_id";
@@ -38,9 +39,13 @@ pub struct BindingRow {
     pub asset_api_profile: Option<String>,
     pub group_id: Option<String>,
     pub is_active: i64,
-    /// 1 = 默认素材上游（等级未命中映射时兜底），全表至多一条
-    pub is_default: i64,
     pub remark: Option<String>,
+    /// 鉴权模式：bearer（默认）/ volc_v4（火山 V4 签名）
+    pub auth_mode: Option<String>,
+    /// V4 签名 AccessKey（回显用；SecretKey 出于安全不回传）
+    pub access_key: Option<String>,
+    pub sign_region: Option<String>,
+    pub sign_service: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
     pub channel_name: Option<String>,
@@ -65,12 +70,20 @@ pub struct CreateBindingRequest {
     pub remark: Option<String>,
     #[serde(default)]
     pub asset_api_profile: Option<String>,
-    /// 适用用户等级 ID 列表；缺省/空 = 不挂等级（仅靠默认标记或显式 ns 命中）
+    /// 鉴权模式：bearer（默认）/ volc_v4
+    #[serde(default)]
+    pub auth_mode: Option<String>,
+    #[serde(default)]
+    pub access_key: Option<String>,
+    #[serde(default)]
+    pub secret_key: Option<String>,
+    #[serde(default)]
+    pub sign_region: Option<String>,
+    #[serde(default)]
+    pub sign_service: Option<String>,
+    /// 适用用户等级 ID 列表；缺省/空 = 不挂等级，该绑定不会被 /api?Action= 链路命中
     #[serde(default)]
     pub level_ids: Option<Vec<i64>>,
-    /// 1 = 设为默认素材上游，其他绑定的默认标记自动取消
-    #[serde(default)]
-    pub is_default: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -81,12 +94,16 @@ pub struct UpdateBindingRequest {
     pub is_active: Option<i64>,
     pub remark: Option<String>,
     pub asset_api_profile: Option<String>,
+    /// 鉴权模式：bearer / volc_v4；None = 不改动
+    pub auth_mode: Option<String>,
+    pub access_key: Option<String>,
+    /// SecretKey：None = 不改动（保留原值）；Some(空串) = 清空
+    pub secret_key: Option<String>,
+    pub sign_region: Option<String>,
+    pub sign_service: Option<String>,
     /// None = 不改动等级映射；Some(vec) = 整体替换（空数组 = 清空）
     #[serde(default)]
     pub level_ids: Option<Vec<i64>>,
-    /// None = 不改动；Some(1) = 设为默认并取消其他；Some(0) = 取消默认
-    #[serde(default)]
-    pub is_default: Option<i64>,
 }
 
 /// 校验协议描述符：未传（None）= 不改动；空串 = 清除描述符（回落原火山透传）；
@@ -104,6 +121,28 @@ fn validate_profile(raw: Option<&str>) -> Result<Option<String>, AppError> {
         ));
     }
     Ok(Some(trimmed.to_string()))
+}
+
+/// 校验素材接口地址：允许空（= 跟随渠道 base_url）、以 `/` 开头的相对路径、
+/// 或以 http(s):// 开头的绝对 URL（素材域名与模型域名分离的上游）。
+/// 其他写法（如漏填 scheme 的 `mintel.591ll.com/render/api`）会被 build_asset_endpoint
+/// 当相对路径拼接，产出不会报错、只会 404 的地址，排查成本远高于入口直接报错。
+fn validate_asset_base_path(raw: &str) -> Result<(), AppError> {
+    let v = raw.trim();
+    if v.is_empty() || v.starts_with('/') || crate::services::upstream_asset_client::is_absolute_url(v) {
+        return Ok(());
+    }
+    Err(AppError::BadRequest(
+        "素材接口地址必须以 / 开头（相对路径，拼在渠道 base_url 之后），或以 http:// / https:// 开头（完整地址，素材域名与模型域名分离）".into(),
+    ))
+}
+
+/// 归一鉴权模式：仅接受 bearer / volc_v4，其余（含空）回落 bearer，避免存脏值致读库端误判
+fn normalize_auth_mode(raw: Option<&str>) -> String {
+    match raw.map(|s| s.trim().to_ascii_lowercase()) {
+        Some(m) if m == "volc_v4" => "volc_v4".to_string(),
+        _ => "bearer".to_string(),
+    }
 }
 
 async fn ensure_channel_config_exists(state: &AppState, id: i64) -> Result<(), AppError> {
@@ -235,38 +274,11 @@ async fn rewrite_level_map(
     Ok(())
 }
 
-/// 写默认标记：置 1 时先清掉其他绑定的默认，保证全表至多一条默认上游
-async fn apply_default_flag(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    state: &AppState,
-    binding_id: i64,
-    is_default: i64,
-) -> Result<(), AppError> {
-    if is_default == 1 {
-        sqlx::query(&state.db.format_query(
-            "UPDATE upstream_asset_bindings SET is_default = 0 WHERE is_default = 1 AND id <> ?",
-        ))
-        .bind(binding_id)
-        .execute(&mut **tx)
-        .await
-        .map_err(|e| AppError::Internal(format!("取消原默认绑定失败: {e}")))?;
-    }
-    sqlx::query(&state.db.format_query(
-        "UPDATE upstream_asset_bindings SET is_default = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-    ))
-    .bind(is_default)
-    .bind(binding_id)
-    .execute(&mut **tx)
-    .await
-    .map_err(|e| AppError::Internal(format!("更新默认标记失败: {e}")))?;
-    Ok(())
-}
-
 pub async fn list_bindings(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let rows: Vec<BindingRow> = sqlx::query_as(&state.db.format_query(&format!(
-        "{} ORDER BY b.is_default DESC, b.id DESC",
+        "{} ORDER BY b.id DESC",
         BINDING_SELECT
     )))
     .fetch_all(&state.db.pool)
@@ -307,13 +319,13 @@ pub async fn create_binding(
         return Err(AppError::BadRequest("请选择上游渠道".into()));
     }
     ensure_channel_config_exists(&state, req.channel_config_id).await?;
+    validate_asset_base_path(&req.asset_base_path)?;
     let profile = validate_profile(req.asset_api_profile.as_deref())?;
     let level_ids = normalize_level_ids(req.level_ids.as_deref());
     ensure_levels_exist(&state, &level_ids).await?;
     ensure_levels_free(&state, &level_ids, None).await?;
-    let is_default = if req.is_default.unwrap_or(0) == 1 { 1 } else { 0 };
 
-    // 绑定主记录 + 等级映射 + 默认标记必须同事务：否则可能落下「占了等级却没绑定」的孤儿映射
+    // 绑定主记录 + 等级映射必须同事务：否则可能落下「占了等级却没绑定」的孤儿映射
     let mut tx = state
         .db
         .pool
@@ -321,18 +333,23 @@ pub async fn create_binding(
         .await
         .map_err(|e| AppError::Internal(format!("开启事务失败: {e}")))?;
     let id: i64 = sqlx::query_scalar(&state.db.format_query(
-        "INSERT INTO upstream_asset_bindings (name, channel_config_id, asset_base_path, remark, asset_api_profile) \
-         VALUES (?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO upstream_asset_bindings (name, channel_config_id, asset_base_path, remark, asset_api_profile, \
+         auth_mode, access_key, secret_key, sign_region, sign_service) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     ))
     .bind(&name)
     .bind(req.channel_config_id)
     .bind(req.asset_base_path.trim())
     .bind(req.remark.as_deref().unwrap_or_default())
     .bind(profile.as_deref().unwrap_or_default())
+    .bind(normalize_auth_mode(req.auth_mode.as_deref()))
+    .bind(req.access_key.as_deref().map(str::trim).unwrap_or_default())
+    .bind(req.secret_key.as_deref().map(str::trim).unwrap_or_default())
+    .bind(req.sign_region.as_deref().map(str::trim).unwrap_or_default())
+    .bind(req.sign_service.as_deref().map(str::trim).unwrap_or_default())
     .fetch_one(&mut *tx)
     .await
     .map_err(|e| AppError::Internal(format!("创建素材绑定失败: {e}")))?;
-    apply_default_flag(&mut tx, &state, id, is_default).await?;
     rewrite_level_map(&mut tx, &state, id, &level_ids).await?;
     tx.commit()
         .await
@@ -355,6 +372,9 @@ pub async fn update_binding(
             return Err(AppError::BadRequest("请选择上游渠道".into()));
         }
         ensure_channel_config_exists(&state, cid).await?;
+    }
+    if let Some(p) = &req.asset_base_path {
+        validate_asset_base_path(p)?;
     }
     let profile = validate_profile(req.asset_api_profile.as_deref())?;
     // None = 本次不动等级映射（如列表页只切换启用开关）；Some = 整体替换
@@ -381,6 +401,11 @@ pub async fn update_binding(
          is_active = COALESCE(?, is_active), \
          remark = COALESCE(?, remark), \
          asset_api_profile = COALESCE(?, asset_api_profile), \
+         auth_mode = COALESCE(?, auth_mode), \
+         access_key = COALESCE(?, access_key), \
+         secret_key = COALESCE(?, secret_key), \
+         sign_region = COALESCE(?, sign_region), \
+         sign_service = COALESCE(?, sign_service), \
          updated_at = CURRENT_TIMESTAMP WHERE id = ?",
     ))
     .bind(req.name.as_deref().map(str::trim))
@@ -389,6 +414,11 @@ pub async fn update_binding(
     .bind(req.is_active)
     .bind(req.remark.as_deref())
     .bind(profile)
+    .bind(req.auth_mode.as_deref().map(|m| normalize_auth_mode(Some(m))))
+    .bind(req.access_key.as_deref().map(str::trim))
+    .bind(req.secret_key.as_deref().map(str::trim))
+    .bind(req.sign_region.as_deref().map(str::trim))
+    .bind(req.sign_service.as_deref().map(str::trim))
     .bind(id)
     .execute(&mut *tx)
     .await
@@ -399,9 +429,6 @@ pub async fn update_binding(
     }
     if let Some(ids) = &level_ids {
         rewrite_level_map(&mut tx, &state, id, ids).await?;
-    }
-    if let Some(d) = req.is_default {
-        apply_default_flag(&mut tx, &state, id, if d == 1 { 1 } else { 0 }).await?;
     }
     tx.commit()
         .await
@@ -435,18 +462,20 @@ pub async fn test_binding(
 ) -> Result<Json<serde_json::Value>, AppError> {
     use crate::services::upstream_asset_client as uac;
     let creds = uac::load_binding_endpoints(&state.db, &[id]).await;
-    let Some((endpoint, api_key)) = creds.get(&id).cloned() else {
+    let Some(be) = creds.get(&id).cloned() else {
         return Err(AppError::BadRequest(
             "绑定不存在，或渠道已停用/凭证缺失".into(),
         ));
     };
+    let api_key = be.auth.api_key.clone();
     let ctx = uac::UpstreamCallCtx {
         http: &state.http_client,
         db: &state.db,
         user_id: "admin",
         plugin_name: uac::PLUGIN_NAME,
-        endpoint_base: &endpoint,
+        endpoint_base: &be.endpoint,
         api_key: &api_key,
+        auth: Some(&be.auth),
     };
     let start = std::time::Instant::now();
     match uac::call_action_logged(&ctx, "ListAssetGroups", &serde_json::json!({})).await {
