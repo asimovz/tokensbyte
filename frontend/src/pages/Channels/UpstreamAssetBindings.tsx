@@ -28,6 +28,8 @@ interface BindingRow {
   sign_service?: string | null;
   /** 适用用户等级 ID 列表 */
   level_ids?: number[];
+  /** 是否被至少一个启用中的渠道分组引用（按分组推导时命中前提） */
+  referenced_by_channel?: boolean;
   remark?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
@@ -263,7 +265,7 @@ const UpstreamAssetBindings: React.FC = () => {
           {ids.map((lid) => <Tag key={lid} color="geekblue">{levelName(lid)}</Tag>)}
         </Space>
       ) : (
-        <Tooltip title="未指定等级：该绑定不会被 /api?Action= 素材请求命中（素材路由只按用户等级解析）；仍可用于视频生成转发规则显式指定">
+        <Tooltip title="未指定等级：【系统设置-中转设置】的「按渠道分组推导素材上游」开关关闭时，该绑定不会被 /api?Action= 素材请求命中；开关打开后仍可由渠道分组推导命中。无论开关，都可用作视频生成转发规则的显式指定">
           <Text type="secondary">未指定</Text>
         </Tooltip>
       )),
@@ -276,6 +278,11 @@ const UpstreamAssetBindings: React.FC = () => {
           <Space size={4}>
             <span>{record.channel_name || `#${record.channel_config_id}`}</span>
             {record.channel_status === 0 && <Tag color="red">渠道已停用</Tag>}
+            {record.channel_status !== 0 && record.referenced_by_channel === false && (
+              <Tooltip title="没有任何启用中的渠道分组引用该凭证（分组页的【凭证/上游】选的是它）。开关打开后按分组推导永远命中不到这条绑定；如需生效，请在渠道分组页新建/改一个分组指向该凭证">
+                <Tag color="orange">无分组引用</Tag>
+              </Tooltip>
+            )}
           </Space>
           <Text type="secondary" style={{ fontSize: 12 }}>{record.channel_base_url || '-'}</Text>
         </div>
@@ -367,8 +374,9 @@ const UpstreamAssetBindings: React.FC = () => {
         <div>
           <Title level={4} style={{ marginBottom: 4 }}>上游素材绑定</Title>
           <Text type="secondary" style={{ fontSize: 13 }}>
-            指定哪个上游渠道承担火山素材接口（/api?Action=CreateAsset 等）透传。
-            每条绑定可直接声明适用的用户等级：请求时按「等级命中 → 默认绑定」依次解析，不再依赖渠道优先级。
+            指定哪个上游渠道承担火山素材接口（/api?Action=CreateAsset 等）透传。一个凭证只允许一条启用中的绑定。
+            命中方式由【系统设置-中转设置】的「按渠道分组推导素材上游」开关决定：关 = 只按下边的适用用户等级；
+            开 = 先按「用户等级 → 渠道分组 → 分组凭证 → 绑定」推导，等级映射退为回落通道。
           </Text>
         </div>
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建绑定</Button>
@@ -460,7 +468,7 @@ const UpstreamAssetBindings: React.FC = () => {
           <Form.Item
             name="level_ids"
             label="适用用户等级"
-            extra="一个绑定可挂多个等级；已被其他绑定占用的等级不会出现在下拉里（一个等级只能走一个素材上游）。留空 = 该绑定不会被素材请求命中，仅用于视频生成链路显式指定"
+            extra="一个绑定可挂多个等级；已被其他绑定占用的等级不会出现在下拉里（一个等级只能走一个素材上游）。分组推导开关打开后本项仅作回落通道，可留空；开关关闭时留空 = 该绑定不会被素材请求命中"
           >
             <Select
               mode="multiple"

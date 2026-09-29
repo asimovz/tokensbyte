@@ -385,6 +385,7 @@ const Settings: React.FC = () => {
           manual_poll_upstream: relay?.manual_poll_upstream !== false,
           poll_tick_secs: clampPollTickSecs(relay?.poll_tick_secs),
           video_inflight_enabled: relay?.video_inflight_enabled === true,
+          asset_route_by_group: relay?.asset_route_by_group === true,
           video_inflight_tiers: Array.isArray(relay?.video_inflight_tiers) && relay.video_inflight_tiers.length > 0
             ? relay.video_inflight_tiers.map((t: any) => ({
                 max_available: t.max_available ?? null,
@@ -519,6 +520,7 @@ const Settings: React.FC = () => {
           manual_poll_upstream: values.relay?.manual_poll_upstream !== false,
           poll_tick_secs: clampPollTickSecs(values.relay?.poll_tick_secs),
           video_inflight_enabled: values.relay?.video_inflight_enabled === true,
+          asset_route_by_group: values.relay?.asset_route_by_group === true,
           video_inflight_tiers: (values.relay?.video_inflight_tiers || []).map((t: any) => ({
             max_available: t?.max_available === undefined || t?.max_available === null || t?.max_available === ''
               ? null
@@ -842,6 +844,22 @@ const Settings: React.FC = () => {
         rules={[{ required: true, message: '必填' }]}
       >
         <InputNumber min={5} max={300} step={5} addonAfter="秒" style={{ width: 180 }} />
+      </Form.Item>
+
+      <Divider style={{ margin: '16px 0 12px' }}>素材上游路由</Divider>
+      <Form.Item
+        label="按渠道分组推导素材上游"
+        name={['relay', 'asset_route_by_group']}
+        valuePropName="checked"
+        extra={
+          <Text type="secondary">
+            关（默认）：素材上游只读【上游素材绑定】页的用户等级映射，行为与改造前一致。
+            开：先按「用户等级 → 渠道分组 → 分组凭证 → 素材绑定」自动推导，等级映射退为回落与消歧通道；
+            若某等级被两个带绑定的分组同时覆盖则直接报错，不会猜上游。打开前请先确认每个等级只有一个带素材绑定的分组。
+          </Text>
+        }
+      >
+        <Switch />
       </Form.Item>
 
       <Divider style={{ margin: '16px 0 12px' }}>低余额限制未完成视频</Divider>

@@ -1019,6 +1019,10 @@ pub struct RelaySettings {
     /// 按可用额落档的在途上限（空则回落默认档）
     #[serde(default = "default_video_inflight_tiers")]
     pub video_inflight_tiers: Vec<VideoInflightTier>,
+    /// 素材上游按渠道分组推导。开：先按「等级可达分组 → 分组凭证 → 素材绑定」定位，
+    /// 推不出时回落等级映射；关（默认）：仅按【上游素材绑定】的用户等级映射定位，与改造前一致。
+    #[serde(default)]
+    pub asset_route_by_group: bool,
 }
 
 impl RelaySettings {
@@ -1061,6 +1065,7 @@ impl Default for RelaySettings {
             poll_tick_secs: 30,
             video_inflight_enabled: false,
             video_inflight_tiers: default_video_inflight_tiers(),
+            asset_route_by_group: false,
         }
     }
 }

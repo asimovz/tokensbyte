@@ -119,6 +119,12 @@ pub async fn get_cached_relay_settings(db: &Database) -> Arc<RelaySettings> {
         .await
 }
 
+/// 素材上游「按渠道分组推导」灰度开关。复用 `RELAY_SETTINGS` 槽（TTL 60s），
+/// 管理端保存 relay_settings 时已写穿缓存，改完即生效不需重启。
+pub async fn get_cached_asset_route_by_group(db: &Database) -> bool {
+    get_cached_relay_settings(db).await.asset_route_by_group
+}
+
 pub fn put_cached_site_timezone(tz: impl AsRef<str>) {
     SITE_TZ.put(Arc::<str>::from(tz.as_ref()));
 }

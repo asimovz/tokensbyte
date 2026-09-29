@@ -5,7 +5,7 @@
  * @license        MIT (https://www.tokensbyte.ai/)
  */
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::models::{
     Channel, ChannelListResponse, ChannelSafe, CreateChannelRequest, UpdateChannelRequest,
 };
@@ -76,6 +76,24 @@ pub async fn create_channel(
     }
     if group_aid_val.is_empty() {
         group_aid_val = rand::thread_rng().gen_range(1000..10000).to_string(); // fallback
+    }
+
+    // 校验 A：带素材绑定的分组不允许让同一等级被两条不同绑定覆盖（详见 relay::asset_route）。
+    // 只在灰度开关打开后生效 —— 开关关闭时保存行为与改造前完全一致。
+    if crate::relay::asset_route::by_group_enabled(&state.db).await {
+        let included: Vec<String> = serde_json::from_str(&groups_json).unwrap_or_default();
+        let excluded: Vec<String> = serde_json::from_str(&exclude_groups_json).unwrap_or_default();
+        let problems = crate::relay::asset_route::check_group_invariant(
+            &state.db,
+            None,
+            request.preset_id,
+            &included,
+            &excluded,
+        )
+        .await?;
+        if let Some(first) = problems.into_iter().next() {
+            return Err(AppError::BadRequest(format!("素材上游分组冲突：{first}")));
+        }
     }
 
     let sql = r#"INSERT INTO channels (name, provider_type, base_url, api_key, models, model_mapping, user_groups, exclude_user_groups, group_aid, preset_id, category_id, sort_order, priority, weight, status, max_rps, quota_limit, quota_used, daily_quota_limit, weekly_quota_limit, monthly_quota_limit, config, rate)
@@ -229,6 +247,21 @@ pub async fn update_channel(
         if group_aid_val.is_empty() {
             group_aid_val = rand::thread_rng().gen_range(1000..10000).to_string();
             // fallback
+        }
+    }
+
+    // 校验 A：同 create_channel。禁用的分组不进候选集，故跳过校验。
+    if channel.status == 1 && crate::relay::asset_route::by_group_enabled(&state.db).await {
+        let problems = crate::relay::asset_route::check_group_invariant(
+            &state.db,
+            Some(channel.id),
+            channel.preset_id,
+            &channel.get_user_groups(),
+            &channel.get_exclude_user_groups(),
+        )
+        .await?;
+        if let Some(first) = problems.into_iter().next() {
+            return Err(AppError::BadRequest(format!("素材上游分组冲突：{first}")));
         }
     }
 

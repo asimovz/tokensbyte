@@ -1079,12 +1079,26 @@ pub async fn convert_content_urls_via_upstream(
     struct BindingRow {
         plugin_enabled: i64,
         binding_found: Option<i64>,
-        is_active: Option<i32>,
+        /// is_active 已由迁移 upstream_asset_bindings_is_active_bigint_v1 升级为 BIGINT，
+        /// 按 i32 取会整行解码失败，而外层 `.ok().flatten()` 会把错误吞成 None，
+        /// 表现成「插件未启用」的假象，难查
+        is_active: Option<i64>,
         asset_base_path: Option<String>,
         group_id: Option<String>,
         channel_config_id: Option<i64>,
         base_url: Option<String>,
         api_key: Option<String>,
+        /// 绑定级鉴权配置（与 relay::native 透传分支同源）：V4 上游靠 AK/SK 签名
+        #[sqlx(default)]
+        auth_mode: Option<String>,
+        #[sqlx(default)]
+        access_key: Option<String>,
+        #[sqlx(default)]
+        secret_key: Option<String>,
+        #[sqlx(default)]
+        sign_region: Option<String>,
+        #[sqlx(default)]
+        sign_service: Option<String>,
         #[sqlx(default)]
         config_status: Option<i32>,
     }
@@ -1093,6 +1107,7 @@ pub async fn convert_content_urls_via_upstream(
     let row: Option<BindingRow> = sqlx::query_as(&state.db.format_query(
         "SELECT p.is_enabled AS plugin_enabled, b.id AS binding_found, b.is_active, \
                 b.asset_base_path, b.group_id, b.channel_config_id, c.base_url, c.api_key, \
+                b.auth_mode, b.access_key, b.secret_key, b.sign_region, b.sign_service, \
                 c.status AS config_status \
          FROM plugins p \
          LEFT JOIN upstream_asset_bindings b ON b.id = ? \
@@ -1133,9 +1148,35 @@ pub async fn convert_content_urls_via_upstream(
     let base_url = row.base_url.take().unwrap_or_default();
     let api_key = row.api_key.take().unwrap_or_default();
     let channel_config_id = row.channel_config_id.unwrap_or(0);
-    if base_url.trim().is_empty() || api_key.trim().is_empty() {
+    if base_url.trim().is_empty() {
         errors.push(format!(
-            "上游素材转换失败: 上游渠道配置#{} 缺少 base_url 或 api_key",
+            "上游素材转换失败: 上游渠道配置#{} 缺少 base_url",
+            channel_config_id
+        ));
+        return (logs, errors);
+    }
+    // 绑定级鉴权：乐信等 volc_v4 上游用 AK/SK 签名，渠道 api_key 可能为空或仅作占位，
+    // 不能沿用「api_key 必填」的一刀切判断（会把 V4 绑定误判成缺凭证）。
+    // 口径与 upstream_asset_client::load_binding_endpoints 保持一致。
+    let auth = uac::BindingAuth {
+        auth_mode: row.auth_mode.take().unwrap_or_default(),
+        api_key: api_key.clone(),
+        access_key: row.access_key.take().unwrap_or_default(),
+        secret_key: row.secret_key.take().unwrap_or_default(),
+        sign_region: row.sign_region.take().unwrap_or_default(),
+        sign_service: row.sign_service.take().unwrap_or_default(),
+    };
+    if auth.is_v4() {
+        if auth.access_key.trim().is_empty() || auth.secret_key.trim().is_empty() {
+            errors.push(format!(
+                "上游素材转换失败: 绑定#{} 为 V4 鉴权但未配置 AccessKey/SecretKey",
+                binding_id
+            ));
+            return (logs, errors);
+        }
+    } else if api_key.trim().is_empty() {
+        errors.push(format!(
+            "上游素材转换失败: 上游渠道配置#{} 缺少 api_key",
             channel_config_id
         ));
         return (logs, errors);
@@ -1157,8 +1198,9 @@ pub async fn convert_content_urls_via_upstream(
         plugin_name: &plugin_ns,
         endpoint_base: &endpoint,
         api_key: &api_key,
-        // 视频转素材流程暂用渠道 api_key 走 Bearer；乐信等 V4 上游的素材直连走 native passthrough
-        auth: None,
+        // 按绑定声明的鉴权模式下发（bearer → 渠道 api_key；volc_v4 → AK/SK 签名）。
+        // 之前此处固定传 None，使 V4 上游的视频素材转换只能发 Bearer，永远 401。
+        auth: Some(&auth),
     };
 
     // 确保 GroupId

@@ -562,7 +562,30 @@ async fn ensure_ark_owned_or_claim(
     Ok(())
 }
 
-/// 素材透传绑定解析：**只认**用户等级 → `asset_binding_levels` 精确映射。
+/// 等级 → 绑定 精确映射（绑定与其上游凭证均须启用）。开关关闭时是唯一路由依据；
+/// 开关打开后降级为「分组候选歧义时的消歧器」与「分组推不出时的回落」。
+async fn level_binding_id(state: &AppState, lid: i64) -> Result<Option<i64>, AppError> {
+    let sql = state.db.format_query(
+        "SELECT l.binding_id FROM asset_binding_levels l \
+         JOIN upstream_asset_bindings b ON b.id = l.binding_id \
+         LEFT JOIN channel_configs c ON c.id = b.channel_config_id \
+         WHERE l.level_id = ? AND b.is_active = 1 AND COALESCE(c.status, 1) = 1 \
+         ORDER BY l.binding_id LIMIT 1",
+    );
+    sqlx::query_scalar(&sql)
+        .bind(lid)
+        .fetch_optional(&state.db.pool)
+        .await
+        .map_err(|e| AppError::Internal(format!("查询等级素材映射失败: {e}")))
+}
+
+/// 素材透传绑定解析。
+///
+/// 灰度开关 `relay_settings.asset_route_by_group` 打开后按三级解析：
+/// 1. 分组推导：等级可达分组 → 分组凭证(`preset_id`) → 绑定，唯一命中即用；
+/// 2. 多候选：先试等级映射能否在候选中消歧，消不掉就报错并列出候选（绝不按 id/priority 猜一家）；
+/// 3. 推不出：回落等级映射，行为与开关关闭时逐字一致。
+/// 开关关闭：只认等级 → `asset_binding_levels` 精确映射（改造前行为）。
 ///
 /// 命中且绑定与其上游渠道均启用 → `Ok(Some(binding_id))`；
 /// 平台一条绑定都没配 → `Ok(None)`，回落商业插件分支保持旧行为；
@@ -574,6 +597,7 @@ async fn ensure_ark_owned_or_claim(
 /// - `channels` 的 user_groups/priority 兼容层：与等级映射语义重叠，且
 ///   `ORDER BY id LIMIT 1` 使同渠道多绑定只命中最小 id、无绑定渠道会被自动
 ///   INSERT 出一条绑定（可能给纯文本 LLM 网关凭空造出素材上游）。
+///   本次重新引入 channels 是把它当**推导键**（凭证同源）而非兜底排序，语义不同。
 async fn resolve_asset_binding(
     state: &AppState,
     user_id: &str,
@@ -596,20 +620,69 @@ async fn resolve_asset_binding(
     };
     let level_id_str = ug.level_id.unwrap_or_default().to_string();
 
-    // ── 一级：等级 → 绑定 精确映射（绑定与其上游渠道均须启用）──
+    // ── 分组推导（灰度）──
+    if crate::relay::asset_route::by_group_enabled(&state.db).await {
+        // 等级键：group_key 与等级 id 字符串都参与匹配，口径与 relay::router 选渠一致
+        let mut keys = vec![ug.user_group.clone()];
+        if let Some(lid) = ug.level_id {
+            keys.push(lid.to_string());
+        }
+        use crate::relay::asset_route::Outcome;
+        match crate::relay::asset_route::resolve_by_group(&state.db, &keys).await? {
+            Outcome::Hit(c) => {
+                tracing::info!(
+                    "[UarRoute] 分组推导命中 用户={} 分组={} 等级={} 渠道#{} 绑定#{}",
+                    user_id,
+                    ug.user_group,
+                    level_id_str,
+                    c.channel_id,
+                    c.binding_id
+                );
+                return Ok(Some(c.binding_id));
+            }
+            Outcome::Ambiguous(cands) => {
+                // 等级映射落在候选集内才算消歧成功；否则报错让人去改配置
+                if let Some(lid) = ug.level_id {
+                    if let Some(bid) = level_binding_id(state, lid).await? {
+                        if cands.iter().any(|c| c.binding_id == bid) {
+                            tracing::warn!(
+                                "[UarRoute] 分组候选歧义已由等级映射消歧 用户={} 等级#{} 绑定#{} 候选={}",
+                                user_id,
+                                lid,
+                                bid,
+                                crate::relay::asset_route::describe(&cands)
+                            );
+                            return Ok(Some(bid));
+                        }
+                    }
+                }
+                tracing::warn!(
+                    "[UarRoute] 分组候选歧义 用户={} 分组={} 等级={} 候选={}",
+                    user_id,
+                    ug.user_group,
+                    level_id_str,
+                    crate::relay::asset_route::describe(&cands)
+                );
+                return Err(AppError::BadRequest(format!(
+                    "当前用户的素材上游存在多个候选，无法确定使用哪一个：{}；请为等级「{}」只保留一个带素材绑定的渠道分组",
+                    crate::relay::asset_route::describe(&cands),
+                    ug.user_group
+                )));
+            }
+            Outcome::Empty => {
+                // 不直接 400：存量部署可能只配了等级映射、分组侧没挂素材凭证
+                tracing::debug!(
+                    "[UarRoute] 分组推导无候选，回落等级映射 用户={} 分组={}",
+                    user_id,
+                    ug.user_group
+                );
+            }
+        }
+    }
+
+    // ── 等级 → 绑定 精确映射（开关关闭时是唯一路径；开关打开时是回落与消歧通道）──
     if let Some(lid) = ug.level_id {
-        let hit: Option<i64> = sqlx::query_scalar(&state.db.format_query(
-            "SELECT l.binding_id FROM asset_binding_levels l \
-             JOIN upstream_asset_bindings b ON b.id = l.binding_id \
-             LEFT JOIN channel_configs c ON c.id = b.channel_config_id \
-             WHERE l.level_id = ? AND b.is_active = 1 AND COALESCE(c.status, 1) = 1 \
-             ORDER BY l.binding_id LIMIT 1",
-        ))
-        .bind(lid)
-        .fetch_optional(&state.db.pool)
-        .await
-        .map_err(|e| AppError::Internal(format!("查询等级素材映射失败: {e}")))?;
-        if let Some(bid) = hit {
+        if let Some(bid) = level_binding_id(state, lid).await? {
             tracing::info!(
                 "[UarRoute] 等级映射命中 用户={} 分组={} 等级#{} 绑定#{}",
                 user_id,
@@ -652,7 +725,7 @@ pub async fn ark_asset_proxy(
     Query(params): Query<HashMap<String, String>>,
     Json(mut body): Json<serde_json::Value>,
 ) -> AppResult<Response> {
-    // 上游素材透传路由：按用户等级 → 绑定映射解析，解析失败直接报错（无静默兜底）。
+    // 上游素材透传路由：开关打开时先按渠道分组推导，再回落用户等级映射；解析失败直接报错（无静默兜底）。
     // 仅当平台一条绑定都没配时返回 None，回落下方商业插件分支保持旧行为。
     // ns 参数不再参与路由判定（已废弃的 ns=uar:<绑定ID> 显式入口已移除），
     // 仅在商业分支中作为插件命名空间使用（asset_manager / asset_manager_intl，火山官方取值）。

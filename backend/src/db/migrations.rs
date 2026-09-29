@@ -3422,6 +3422,29 @@ macro_rules! pg_migration_blocks {
         "COMMENT ON COLUMN upstream_asset_bindings.is_default IS '[已废弃] 原默认素材上游兜底标记；路由已改为只认等级映射，应用层不再读写此列'"
     );
 
+    // ── 素材上游按渠道分组推导：一个凭证只允许一条启用中的绑定（DB 侧硬保证）──
+    // 推导链「等级 → 分组(channels.preset_id) → 绑定(channel_config_id)」要求凭证→绑定是函数关系，
+    // 同凭证多条启用绑定会让候选集出现两条不同配置。入口有校验 B，这里兜住手改 SQL 与并发写入。
+    // 故意不进 once_migration：历史脏数据未清时本次会跳过，需在数据清理后的下次启动自动补建；
+    // 语句自身幂等（IF NOT EXISTS + 前置重复计数），代价仅每次启动一次 GROUP BY。
+    let uar_unique_index = r#"DO $$
+        DECLARE dup bigint;
+        BEGIN
+          SELECT COUNT(*) INTO dup FROM (
+            SELECT channel_config_id FROM upstream_asset_bindings
+            WHERE is_active = 1 GROUP BY channel_config_id HAVING COUNT(*) > 1
+          ) d;
+          IF dup = 0 THEN
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_upstream_asset_bindings_active_config
+              ON upstream_asset_bindings(channel_config_id) WHERE is_active = 1;
+          ELSE
+            RAISE WARNING '有 % 个上游凭证存在多条启用中的素材绑定，唯一索引 uq_upstream_asset_bindings_active_config 暂缓创建（不影响启动）；请在【上游素材绑定】页把每个凭证收敛到一条启用绑定', dup;
+          END IF;
+        END $$"#;
+    if let Err(e) = sqlx::query(uar_unique_index).execute(pool).await {
+        tracing::warn!("⚠️ [Migration] 素材绑定唯一索引未能创建（不影响启动）: {:?}", e);
+    }
+
     tracing::info!("PostgreSQL AnyPool migrations completed successfully");
     Ok(())
     }};

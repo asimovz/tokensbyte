@@ -30,7 +30,8 @@ pub struct ResolvedForward {
     pub asset_convert_ns: String,
     /// 是否启用上游渠道素材转换（与 asset_convert 正交，默认关闭）
     pub upstream_asset_convert: bool,
-    /// 上游素材绑定 ID（upstream_asset_bindings.id）
+    /// 上游素材绑定 ID（upstream_asset_bindings.id）。未配置时，视频侧可由
+    /// `relay::asset_route::binding_for_preset` 按本次选中渠道的凭证推导（灰度开关内）。
     pub upstream_asset_binding_id: Option<i64>,
     /// ComfyUI 工作流 ID（comfyui_workflows.id）；仅 target_type=comfyui
     pub comfyui_workflow_id: Option<i64>,
@@ -1770,6 +1771,7 @@ pub fn parse_forward_config(
             .get("upstream_asset_convert")
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
+        // 缺省不在此处填值：推导在调用点（video.rs）做，保证规则里显式配的值永远压过推导
         upstream_asset_binding_id: config
             .get("upstream_asset_binding_id")
             .and_then(|v| v.as_i64()),

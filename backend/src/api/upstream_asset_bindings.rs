@@ -8,10 +8,14 @@
 //! 上游素材绑定管理（upstream_asset_bindings CRUD + 连通性测试）
 //!
 //! 绑定 = 指定哪个上游渠道承担素材接口透传（凭证读 channel_configs，绑定只存指针与素材路径后缀）。
-//! 供 /api?Action= 透传分支（按用户等级映射解析绑定）与视频生成素材转换共用。
+//! 供 /api?Action= 透传分支与视频生成素材转换共用。
 //!
-//! 适用等级（asset_binding_levels）在本页配置：一个绑定可挂多个等级，一个等级只能属于一个绑定。
-//! 唯一性除 DB 唯一索引外，入口再做一次占用校验，以便返回「被哪条绑定占用」的可读提示。
+//! 命中方式由灰度开关 `relay_settings.asset_route_by_group` 决定（判定体在 `relay::asset_route`）：
+//! - 关：按 `asset_binding_levels` 等级映射解析（改造前行为）；
+//! - 开：优先按渠道分组推导（等级 → 分组 → 凭证 → 绑定），等级映射退为回落与消歧通道。
+//!
+//! 两种模式下都硬保证：一个凭证只允许一条启用中的绑定（校验 B + 部分唯一索引），
+//! 一个等级只能属于一条绑定（DB 唯一索引 + 入口占用校验，以便返回「被哪条绑定占用」的可读提示）。
 
 use crate::error::AppError;
 use crate::AppState;
@@ -81,7 +85,8 @@ pub struct CreateBindingRequest {
     pub sign_region: Option<String>,
     #[serde(default)]
     pub sign_service: Option<String>,
-    /// 适用用户等级 ID 列表；缺省/空 = 不挂等级，该绑定不会被 /api?Action= 链路命中
+    /// 适用用户等级 ID 列表。开关关闭时：缺省/空 = 该绑定不会被 /api?Action= 链路命中；
+    /// 开关打开后：按渠道分组推导，不挂等级也能命中，等级映射仅作回落/消歧
     #[serde(default)]
     pub level_ids: Option<Vec<i64>>,
 }
@@ -291,6 +296,14 @@ pub async fn list_bindings(
     .fetch_all(&state.db.pool)
     .await
     .unwrap_or_default();
+    // 被启用分组引用的凭证集合：不在集合内的绑定，开关打开后永远推不出（孤儿绑定），
+    // 前端靠它提示「该绑定当前没有任何渠道分组引用」，避免运营配完以为已生效
+    let referenced: Vec<i64> = sqlx::query_scalar(&state.db.format_query(
+        "SELECT DISTINCT preset_id FROM channels WHERE status = 1 AND preset_id IS NOT NULL",
+    ))
+    .fetch_all(&state.db.pool)
+    .await
+    .unwrap_or_default();
     let data: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
@@ -301,6 +314,7 @@ pub async fn list_bindings(
                 .map(|m| m.level_id)
                 .collect();
             v["level_ids"] = serde_json::json!(ids);
+            v["referenced_by_channel"] = serde_json::json!(referenced.contains(&r.channel_config_id));
             v
         })
         .collect();
@@ -324,6 +338,19 @@ pub async fn create_binding(
     let level_ids = normalize_level_ids(req.level_ids.as_deref());
     ensure_levels_exist(&state, &level_ids).await?;
     ensure_levels_free(&state, &level_ids, None).await?;
+
+    // 校验 B：一个上游凭证只允许一条启用中的绑定。素材上游必须与模型上游同源，
+    // 同凭证多条绑定只会差 asset_base_path / 描述符，应当合并而不是分叉，
+    // 否则分组推导会得到「同一家、两条配置」的歧义。
+    if let Some(msg) = crate::relay::asset_route::check_binding_unique_for_config(
+        &state.db,
+        None,
+        req.channel_config_id,
+    )
+    .await?
+    {
+        return Err(AppError::BadRequest(msg));
+    }
 
     // 绑定主记录 + 等级映射必须同事务：否则可能落下「占了等级却没绑定」的孤儿映射
     let mut tx = state
@@ -385,6 +412,32 @@ pub async fn update_binding(
     if let Some(ids) = &level_ids {
         ensure_levels_exist(&state, ids).await?;
         ensure_levels_free(&state, ids, Some(id)).await?;
+    }
+
+    // 校验 B（只拦新增冲突）：仅「换凭证」或「重新启用」才可能造出同凭证两条启用绑定。
+    // 改名/改路径/改等级时不校验，否则已存在的历史重复数据会连清理入口都保存不了。
+    {
+        let cur: Option<(i64, i64)> = sqlx::query_as(
+            &state.db.format_query(
+                "SELECT channel_config_id, is_active FROM upstream_asset_bindings WHERE id = ?",
+            ),
+        )
+        .bind(id)
+        .fetch_optional(&state.db.pool)
+        .await
+        .map_err(|e| AppError::Internal(format!("查询素材绑定失败: {e}")))?;
+        let (cur_cfg, cur_active) = cur.ok_or_else(|| AppError::NotFound("素材绑定不存在".into()))?;
+        let cfg_changed = req.channel_config_id.map(|c| c != cur_cfg).unwrap_or(false);
+        let reactivating = req.is_active == Some(1) && cur_active != 1;
+        if req.is_active.unwrap_or(cur_active) == 1 && (cfg_changed || reactivating) {
+            let eff_cfg = req.channel_config_id.unwrap_or(cur_cfg);
+            if let Some(msg) =
+                crate::relay::asset_route::check_binding_unique_for_config(&state.db, Some(id), eff_cfg)
+                    .await?
+            {
+                return Err(AppError::BadRequest(msg));
+            }
+        }
     }
 
     let mut tx = state

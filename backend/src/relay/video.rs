@@ -476,10 +476,33 @@ pub async fn video_generations(
             }
         }
 
-        // 素材转换：上游渠道转换优先；否则走现有插件凭证转换
+        // 素材转换：上游渠道转换优先；否则走现有插件凭证转换。
+        // 绑定未显式配置时，按本次请求实际选中的分组凭证推导（同源不变量），受灰度开关控制。
         let mut asset_convert_log: Option<String> = None;
         if resolved.upstream_asset_convert {
-            match resolved.upstream_asset_binding_id {
+            let binding_id = match resolved.upstream_asset_binding_id {
+                Some(bid) => Some(bid),
+                None if crate::relay::asset_route::by_group_enabled(&state.db).await => {
+                    match channel.preset_id {
+                        Some(pid) => {
+                            let derived =
+                                crate::relay::asset_route::binding_for_preset(&state.db, pid).await;
+                            tracing::info!(
+                                "[UarRoute] 视频素材转换按分组推导 渠道#{} preset#{} 绑定={:?}",
+                                channel.id,
+                                pid,
+                                derived
+                            );
+                            derived
+                        }
+                        // 高可用分组 preset_id 恒为 null（子配注入后也被清空）：
+                        // 不推导，保持改造前的「不转换」行为，避免素材上游随请求选渠结果漂移
+                        None => None,
+                    }
+                }
+                None => None,
+            };
+            match binding_id {
                 Some(binding_id) => {
                     let (convert_logs, convert_errors) =
                         super::asset_convert::convert_content_urls_via_upstream(

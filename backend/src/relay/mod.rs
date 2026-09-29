@@ -9,6 +9,8 @@
 pub mod asset_convert;
 // 上游素材 API 描述符引擎：绑定级 asset_api_profile 声明式协议适配（非火山上游如 fantaframe/cmcc）
 pub mod asset_api_profile;
+// 素材上游按渠道分组推导：等级 → 分组 → 凭证 → 绑定（含配置侧唯一性校验）
+pub mod asset_route;
 pub mod billing_pipeline;
 pub mod cascade;
 pub mod channel_quota;

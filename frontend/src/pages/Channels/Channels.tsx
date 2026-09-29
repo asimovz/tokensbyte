@@ -152,6 +152,10 @@ const Channels: React.FC = () => {
   const [availableModels, setAvailableModels] = useState<any[]>([]);
   const [availableUserLevels, setAvailableUserLevels] = useState<any[]>([]);
   const [presets, setPresets] = useState<any[]>([]);
+  /** 凭证 id → 启用中的素材绑定；分组页靠它标识「本分组会承担素材上游」（开关打开后） */
+  const [assetBindingByPreset, setAssetBindingByPreset] = useState<
+    Record<number, { id: number; name: string; count: number }>
+  >({});
   const [activePlugins, setActivePlugins] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [isModalVisible, setIsModalVisible] = useState(() => {
@@ -332,6 +336,30 @@ const Channels: React.FC = () => {
     }
   };
 
+  /** 拉一次启用中的素材绑定并按凭证归组：同凭证多条属异常配置，取最小 id 但保留条数以显式告警 */
+  const fetchAssetBindings = async () => {
+    try {
+      const resp = await (request.get('/upstream-asset-bindings') as unknown as Promise<{ data: any[] }>);
+      const byCfg = new Map<number, any[]>();
+      (resp.data || [])
+        .filter((b) => b.is_active === 1)
+        .forEach((b) => {
+          const k = Number(b.channel_config_id);
+          const arr = byCfg.get(k) || [];
+          arr.push(b);
+          byCfg.set(k, arr);
+        });
+      const map: Record<number, { id: number; name: string; count: number }> = {};
+      byCfg.forEach((arr, k) => {
+        arr.sort((a, b) => a.id - b.id);
+        map[k] = { id: arr[0].id, name: arr[0].name, count: arr.length };
+      });
+      setAssetBindingByPreset(map);
+    } catch (e) {
+      console.error('加载上游素材绑定失败:', e);
+    }
+  };
+
   const fetchCategories = async () => {
     try {
       const resp = await (request.get('/channel-categories') as any);
@@ -348,6 +376,24 @@ const Channels: React.FC = () => {
   };
 
   const activeCategories = categories.filter(c => !!c.is_active);
+
+  /** 上游列的小尾巴：该凭证上挂着启用中的素材绑定就标出来，避免运营在分组页与绑定页之间对不上号 */
+  const renderAssetBindingTag = (presetId?: number | null, style?: React.CSSProperties) => {
+    if (!presetId) return null;
+    const ab = assetBindingByPreset[presetId];
+    if (!ab) return null;
+    return (
+      <Tooltip
+        title={ab.count > 1
+          ? `该凭证上有 ${ab.count} 条启用中的素材绑定（异常配置），此处按最小 id 显示为 #${ab.id}「${ab.name}」；请只保留一条启用绑定`
+          : `打开「按渠道分组推导素材上游」后，本分组承担素材上游：绑定#${ab.id}「${ab.name}」`}
+      >
+        <Tag color={ab.count > 1 ? 'warning' : 'gold'} style={style}>
+          素材{ab.count > 1 ? `×${ab.count}` : ''}
+        </Tag>
+      </Tooltip>
+    );
+  };
 
   const fetchPluginsAndPools = async () => {
     try {
@@ -455,6 +501,7 @@ const Channels: React.FC = () => {
     fetchModels();
     fetchUserLevels();
     fetchPresets();
+    fetchAssetBindings();
     fetchCategories();
     fetchPluginsAndPools();
     fetchHaMaxRetries();
@@ -1096,6 +1143,7 @@ const Channels: React.FC = () => {
                 <Tag color="cyan" style={tagStyle}>预设渠道</Tag>
                 {presetDisabled && <Tag color="error" style={tagStyle}>已禁用</Tag>}
                 <Text strong style={{ fontSize: 12, lineHeight: 1.25 }}>{preset ? preset.name : '未知预设'}</Text>
+                {renderAssetBindingTag(record.preset_id, tagStyle)}
               </div>
               <Text type="secondary" style={{ fontSize: 11, lineHeight: 1.2, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
                 {preset?.yid ? `YID: ${preset.yid}` : `ID: ${record.preset_id}`}
@@ -1735,6 +1783,7 @@ const Channels: React.FC = () => {
                               <Text style={{ fontSize: 12 }}>
                                 {preset?.name || '未知预设'} ({preset?.yid ? `YID: ${preset.yid}` : `ID: ${record.preset_id}`})
                               </Text>
+                              {renderAssetBindingTag(record.preset_id, { borderRadius: 4, margin: 0, fontSize: 10 })}
                             </Space>
                           );
                         })()
