@@ -484,6 +484,10 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({ isUserEnd = false }) 
           key: '/admin0755/upstream-asset-bindings',
           label: <Link to="/admin0755/upstream-asset-bindings">{t('menu.asset_bindings')}</Link>,
         });
+        channelChildren.push({
+          key: '/admin0755/asset-logs',
+          label: <Link to="/admin0755/asset-logs">{t('menu.asset_logs', '\u7d20\u6750\u8bf7\u6c42\u65e5\u5fd7')}</Link>,
+        });
       }
       if (channelChildren.length > 0) {
         menuItems.push({

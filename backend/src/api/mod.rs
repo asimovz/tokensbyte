@@ -17,6 +17,7 @@ use std::sync::Arc;
 pub mod admin_groups;
 pub mod admin_stats_sync;
 pub mod announcements;
+pub mod asset_logs;
 pub mod auth;
 pub mod billing_rules;
 pub mod channel_categories;
@@ -305,7 +306,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         )
         .route("/logs", get(logs::list_logs))
         .route("/logs/export", get(logs::export_logs))
-        .route("/logs/{id}/detail", get(logs::get_log_detail));
+        .route("/logs/{id}/detail", get(logs::get_log_detail))
+        .route("/asset-logs", get(asset_logs::list_asset_logs))
+        .route("/asset-logs/{id}", get(asset_logs::get_asset_log_detail));
 
     #[cfg(plugin_redemptions)]
     {

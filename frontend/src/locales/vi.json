@@ -91,6 +91,7 @@
     "channel_groups": "Nhóm kênh",
     "channel_configs": "Cấu hình kênh",
         "asset_bindings": "Liên kết tài sản",
+            "asset_logs": "Nhật ký yêu cầu tài sản",
     "model_marketplace": "Chợ mô hình",
     "admin_list": "Danh sách quản trị viên",
     "finance_gifts": "Chi tiết quà tặng",

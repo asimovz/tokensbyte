@@ -25,6 +25,7 @@ import ModelChannelsDisplay from './pages/Channels/ModelChannelsDisplay';
 import ChannelTest from './pages/Channels/ChannelTest';
 import ChannelConfigs from './pages/Channels/ChannelConfigs';
 import UpstreamAssetBindings from './pages/Channels/UpstreamAssetBindings';
+import AssetLogs from './pages/Channels/AssetLogs';
 import Models from './pages/Models/Models';
 import ForwardRules from './pages/Models/ForwardRules';
 import BillingRules from './pages/Models/BillingRules';
@@ -786,6 +787,7 @@ const App: React.FC = () => {
             <Route path="upstreams" element={<Upstreams />} />
             <Route path="channel-configs" element={<ChannelConfigs />} />
             <Route path="upstream-asset-bindings" element={<UpstreamAssetBindings />} />
+            <Route path="asset-logs" element={<AssetLogs />} />
             <Route path="channels" element={<Channels />} />
             <Route path="channels/model-display" element={<ModelChannelsDisplay />} />
             <Route path="channels/test/:id" element={<ChannelTest />} />

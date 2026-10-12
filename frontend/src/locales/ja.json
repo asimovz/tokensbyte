@@ -89,6 +89,7 @@
     "channel_groups": "モデルチャネルのグループ化",
     "channel_configs": "アップストリームチャネル構成",
         "asset_bindings": "素材バインディング",
+            "asset_logs": "素材リクエストログ",
     "model_marketplace": "モデルスクエア",
     "playground_2026": "クリエイションセンター2026",
     "announcements": "お知らせ",

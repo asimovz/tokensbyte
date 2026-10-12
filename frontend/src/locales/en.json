@@ -91,6 +91,7 @@
     "channel_groups": "Model Channel Groups",
     "channel_configs": "Upstream Channels",
         "asset_bindings": "Asset Bindings",
+            "asset_logs": "Asset Request Logs",
     "model_marketplace": "Model Marketplace",
     "admin_list": "Administrators",
     "finance_gifts": "Gift Funds",
