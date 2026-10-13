@@ -1264,8 +1264,8 @@ const Users: React.FC = () => {
                                             size="small"
                                             min={siteDiscount !== null ? siteDiscount : 0}
                                             max={2}
-                                            step={0.05}
-                                            precision={2}
+                                            step={0.01}
+                                            precision={3}
                                             value={discount}
                                             onChange={(val) => setDiscountMap(prev => ({ ...prev, [mid]: val ?? 1 }))}
                                             style={{ width: 100 }}
@@ -1273,7 +1273,7 @@ const Users: React.FC = () => {
                                             addonAfter="x"
                                           />
                                           <Text type="secondary" style={{ fontSize: 11 }}>
-                                            {discount !== undefined ? `${(discount * 100).toFixed(0)}%` : '未设置'}
+                                            {discount !== undefined ? `${(discount * 100).toFixed(1)}%` : '未设置'}
                                           </Text>
                                           {siteDiscount !== null && (
                                             <Tag color="orange" style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px' }}>
