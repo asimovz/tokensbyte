@@ -265,13 +265,13 @@ pub async fn export_task_logs(
     Extension(claims): Extension<auth::Claims>,
     Query(query): Query<TaskLogQuery>,
 ) -> Result<Response, AppError> {
-    if claims.role != "admin" {
-        return Err(AppError::Forbidden("仅超级管理员可导出数据".to_string()));
-    }
+    let is_admin = claims.role == "admin";
 
     let mut q = query.clone();
-    if let Some(ref uid) = q.user_id {
-        q.user_id = Some(resolve_user_filter(&state.db, uid).await?);
+    if is_admin {
+        if let Some(ref uid) = q.user_id {
+            q.user_id = Some(resolve_user_filter(&state.db, uid).await?);
+        }
     }
 
     let (where_clause, binds) = build_task_log_where(&claims, &q);
@@ -308,6 +308,16 @@ pub async fn export_task_logs(
     let mut csv = String::from("\u{FEFF}ID,用户ID,用户UID,用户昵称,模型,类型,任务ID,输入Tokens,输出Tokens,缓存Tokens,费用,耗时(ms),状态码,渠道,渠道AID,计费明细,时间\n");
     for r in &rows {
         let formatted_time = crate::api::logs::format_db_time(&r.created_at);
+        // 普通用户导出仅含自己的任务，剔除渠道/渠道 AID/计费明细等内部定位信息
+        let (channel_name, channel_group_aid, billing_detail) = if is_admin {
+            (
+                r.channel_name.as_deref().unwrap_or("-"),
+                r.channel_group_aid.as_deref().unwrap_or("-"),
+                r.billing_detail.as_deref().unwrap_or(""),
+            )
+        } else {
+            ("-", "-", "")
+        };
         csv.push_str(&format!(
             "{},{},\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",{},{},{},{:.6},{},{},\"{}\",\"{}\",\"{}\",\"{}\"\n",
             r.id,
@@ -323,9 +333,9 @@ pub async fn export_task_logs(
             r.cost,
             r.latency_ms,
             r.status_code,
-            r.channel_name.as_deref().unwrap_or("-").replace('"', "\"\""),
-            r.channel_group_aid.as_deref().unwrap_or("-"),
-            r.billing_detail.as_deref().unwrap_or("").replace('"', "\"\""),
+            channel_name.replace('"', "\"\""),
+            channel_group_aid,
+            billing_detail.replace('"', "\"\""),
             formatted_time,
         ));
     }

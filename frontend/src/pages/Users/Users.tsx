@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next';
 import { useLocation } from 'react-router-dom';
 import request from '../../utils/request';
 import useSettingsStore from '../../store/settings';
+import useAuthStore from '../../store/auth';
 import { useThemeStore } from '../../store/theme';
 import generateUUID from '../../utils/uuid';
 
@@ -142,6 +143,15 @@ const Users: React.FC = () => {
   const screens = useBreakpoint();
   const isAdminPage = location.pathname.includes('/admins');
   const targetRole = isAdminPage ? 'admin' : 'user';
+  // 当前登录者是否为超级管理员（库内口径：role=admin 且未绑定管理员分组），决定管理员行是否展示删除入口
+  const { user: currentUser } = useAuthStore();
+  const isSuperAdminOperator = currentUser?.role === 'admin' && !currentUser?.admin_group_id;
+  // 删除入口可见性：普通用户行始终保留；管理员行仅超级管理员可见，且超级管理员自己的行不展示，后端同步强校验
+  const canDeleteRow = (record: User) => {
+    if (record.role !== 'admin') return true;
+    if (!isSuperAdminOperator) return false;
+    return !!record.admin_group_id;
+  };
   
   const { settings } = useSettingsStore();
   const currencySymbol = settings?.currency?.currency_symbol || '$';
@@ -690,9 +700,11 @@ const Users: React.FC = () => {
             />
           )}
           <Button icon={<EditOutlined />} onClick={() => handleEdit(record)} />
-          <Popconfirm title={t('common.confirm_delete')} onConfirm={() => handleDelete(record.id)}>
-            <Button icon={<DeleteOutlined />} danger disabled={record.role === 'admin'} />
-          </Popconfirm>
+          {canDeleteRow(record) && (
+            <Popconfirm title={t('common.confirm_delete')} onConfirm={() => handleDelete(record.id)}>
+              <Button icon={<DeleteOutlined />} danger />
+            </Popconfirm>
+          )}
         </Space>
       ),
     },
@@ -897,9 +909,11 @@ const Users: React.FC = () => {
                     <Button size="small" icon={<LoginOutlined />} style={{ color: '#1677ff', borderColor: '#1677ff' }} onClick={() => handleImpersonate(record)} title="登录此用户" />
                   )}
                   <Button size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)} />
-                  <Popconfirm title={t('common.confirm_delete')} onConfirm={() => handleDelete(record.id)}>
-                    <Button size="small" icon={<DeleteOutlined />} danger disabled={record.role === 'admin'} />
-                  </Popconfirm>
+                  {canDeleteRow(record) && (
+                    <Popconfirm title={t('common.confirm_delete')} onConfirm={() => handleDelete(record.id)}>
+                      <Button size="small" icon={<DeleteOutlined />} danger />
+                    </Popconfirm>
+                  )}
                 </CardActions>
               </MobileCard>
             );

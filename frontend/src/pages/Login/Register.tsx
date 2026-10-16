@@ -50,6 +50,7 @@ const Register: React.FC = () => {
 
   // 表单状态值
   const [usernameVal, setUsernameVal] = useState('');
+  const [nicknameVal, setNicknameVal] = useState('');
   const [passwordVal, setPasswordVal] = useState('');
   const [confirmPasswordVal, setConfirmPasswordVal] = useState('');
   const [emailVal, setEmailVal] = useState('');
@@ -235,6 +236,7 @@ const Register: React.FC = () => {
 
     // 前端表单校验
     const tempErrors: Record<string, string> = {};
+    if (nicknameVal.trim().length > 48) tempErrors.nickname = t('auth.nickname_max_length');
     if (activeTab === 'username') {
       if (!usernameVal.trim()) tempErrors.username = t('auth.username_required');
       else if (usernameVal.trim().length > 48) tempErrors.username = t('auth.username_max_length');
@@ -274,6 +276,7 @@ const Register: React.FC = () => {
       let res: any;
       const commonPayload = {
         password: passwordVal,
+        nickname: nicknameVal.trim(),
         ...(aff ? { aff } : {}),
         ...(team ? { team } : {}),
       };
@@ -410,6 +413,29 @@ const Register: React.FC = () => {
         </div>
       ) : (
         <form onSubmit={handleSubmit} className="space-y-4 mt-2">
+
+          {/* 0. 用户昵称（各注册方式均选填） */}
+          <div className="space-y-1.5 text-left">
+            <label className="text-[13px] font-medium text-zinc-900 dark:text-zinc-100">
+              {t('auth.nickname')}
+              <span className="ml-1 text-[11px] font-normal text-zinc-400 dark:text-zinc-500">{t('auth.optional')}</span>
+            </label>
+            <input
+              type="text"
+              placeholder={t('auth.nickname_placeholder')}
+              maxLength={48}
+              value={nicknameVal}
+              onChange={(e) => {
+                setNicknameVal(e.target.value);
+                if (errors.nickname) setErrors(prev => ({ ...prev, nickname: '' }));
+              }}
+              className={`flex h-9 w-full rounded-md border bg-transparent px-3 py-1 text-sm shadow-xs transition-all duration-200 placeholder:text-zinc-400/70 dark:placeholder:text-zinc-600/70 focus-visible:outline-none focus-visible:ring-1 disabled:cursor-not-allowed disabled:opacity-50
+                ${errors.nickname ? 'border-destructive focus-visible:ring-destructive focus-visible:border-destructive' : 'border-zinc-200 dark:border-zinc-800 focus-visible:border-zinc-950 dark:focus-visible:border-zinc-300 focus-visible:ring-zinc-950/10 dark:focus-visible:ring-zinc-300/10'}`}
+            />
+            {errors.nickname && (
+              <p key={`reg-n-${shakeKey}`} className="text-[11px] font-medium text-destructive animate-shake">{errors.nickname}</p>
+            )}
+          </div>
 
           {/* 1. 用户名注册输入字段 */}
           {activeTab === 'username' && (

@@ -342,6 +342,7 @@ pub async fn register(
 
         // 用户名合规校验
         validate_username(&request.username, true)?;
+        let nickname = normalize_register_nickname(request.nickname.as_ref())?;
 
         // 公开用户名注册不得写入未验证邮箱，否则可被用于邮箱找回接管
         let random_suffix: String = (0..8)
@@ -461,13 +462,14 @@ pub async fn register(
         };
 
         sqlx::query(
-            &state.db.format_query(r#"INSERT INTO users (id, uid, username, email, password_hash, role, balance, gift_balance, is_active, referred_by, register_ip, user_group, referral_history)
-               VALUES (?, ?, ?, ?, ?, 'user', ?, ?, 1, ?, ?, ?, ?)"#)
+            &state.db.format_query(r#"INSERT INTO users (id, uid, username, email, nickname, password_hash, role, balance, gift_balance, is_active, referred_by, register_ip, user_group, referral_history)
+               VALUES (?, ?, ?, ?, ?, ?, 'user', ?, ?, 1, ?, ?, ?, ?)"#)
         )
         .bind(&user_id)
         .bind(&uid)
         .bind(&request.username)
         .bind(&actual_email)
+        .bind(&nickname)
         .bind(&password_hash)
         .bind(initial_balance)
         .bind(gift_amount)
@@ -668,6 +670,9 @@ pub async fn register_email(
             return Err(AppError::Forbidden("Email registration is disabled".to_string()));
         }
 
+        // 昵称选填（仅保留长度校验）
+        let nickname = normalize_register_nickname(request.nickname.as_ref())?;
+
         // 邮箱校验
         validate_email(&settings.registration, &request.email)?;
 
@@ -788,10 +793,11 @@ pub async fn register_email(
         };
 
         sqlx::query(
-            &state.db.format_query(r#"INSERT INTO users (id, uid, username, email, password_hash, role, balance, gift_balance, is_active, referred_by, register_ip, user_group, referral_history)
-               VALUES (?, ?, ?, ?, ?, 'user', ?, ?, 1, ?, ?, ?, ?)"#)
+            &state.db.format_query(r#"INSERT INTO users (id, uid, username, email, nickname, password_hash, role, balance, gift_balance, is_active, referred_by, register_ip, user_group, referral_history)
+               VALUES (?, ?, ?, ?, ?, ?, 'user', ?, ?, 1, ?, ?, ?, ?)"#)
         )
         .bind(&user_id).bind(&uid).bind(&username).bind(&request.email)
+        .bind(&nickname)
         .bind(&password_hash).bind(initial_balance).bind(gift_amount).bind(&referred_by).bind(&raw_ip)
         .bind(&default_group).bind(&referral_history)
         .execute(&mut *tx)
@@ -860,6 +866,9 @@ pub async fn register_mobile(
         if !settings.registration.enable_mobile_registration {
             return Err(AppError::Forbidden("手机号注册未开启".to_string()));
         }
+
+        // 昵称选填（仅保留长度校验）
+        let nickname = normalize_register_nickname(request.nickname.as_ref())?;
 
         // IP 提取与黑名单校验
         let raw_ip = extract_client_ip(&headers, &addr);
@@ -981,11 +990,12 @@ pub async fn register_mobile(
         };
 
         sqlx::query(
-            &state.db.format_query(r#"INSERT INTO users (id, uid, username, email, mobile, password_hash, role, balance, gift_balance, is_active, referred_by, register_ip, user_group, referral_history)
-               VALUES (?, ?, ?, ?, ?, ?, 'user', ?, ?, 1, ?, ?, ?, ?)"#)
+            &state.db.format_query(r#"INSERT INTO users (id, uid, username, email, mobile, nickname, password_hash, role, balance, gift_balance, is_active, referred_by, register_ip, user_group, referral_history)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'user', ?, ?, 1, ?, ?, ?, ?)"#)
         )
         .bind(&user_id).bind(&uid).bind(&username).bind(&placeholder_email)
-        .bind(&request.mobile).bind(&password_hash).bind(initial_balance).bind(gift_amount)
+        .bind(&request.mobile).bind(&nickname)
+        .bind(&password_hash).bind(initial_balance).bind(gift_amount)
         .bind(&referred_by).bind(&raw_ip)
         .bind(&default_group).bind(&referral_history)
         .execute(&mut *tx).await?;
@@ -1684,6 +1694,20 @@ pub async fn oauth_google_callback(
 
 async fn get_all_settings(state: &Arc<AppState>) -> AppResult<AllSettings> {
     crate::api::settings::load_all_settings(state).await
+}
+
+/// 公开注册昵称（选填）：去首尾空格，空串视为未填写入 NULL；超过 48 字符报错。
+pub(crate) fn normalize_register_nickname(raw: Option<&String>) -> AppResult<Option<String>> {
+    let Some(name) = raw
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    else {
+        return Ok(None);
+    };
+    if name.chars().count() > 48 {
+        return Err(AppError::BadRequest("昵称长度不能超过 48 个字符".to_string()));
+    }
+    Ok(Some(name))
 }
 
 /// 用户名合规校验：仅限英文字母和数字，至少6个字符，并且包含敏感词过滤

@@ -30,6 +30,9 @@ const { RangePicker } = DatePicker;
 const { Text } = Typography;
 const { useBreakpoint } = Grid;
 
+/** 筛选栏“全部错误”哨兵值（不等于具体状态码，走 error_only 过滤） */
+const ALL_ERROR_FILTER_VALUE = 'error';
+
 /** 筛选栏常用状态码（含上游常见 422） */
 const STATUS_CODE_FILTER_VALUES = [
   '0', '400', '401', '402', '403', '404', '408', '409', '422', '429', '500', '502', '503', '504',
@@ -65,9 +68,13 @@ function buildLogListParams(f: LogListFilters): Record<string, unknown> {
   if (uid) params.user_id = uid;
   if (f.userGroupFilter) params.user_group = f.userGroupFilter;
   if (f.statusFilter) params.status = f.statusFilter;
-  const statusCode = parseStatusCodeFilter(f.statusCodeFilter);
-  if (statusCode !== undefined) params.status_code = statusCode;
-  Object.assign(params, toDateRangeParams(f.dateRange));
+  if (f.statusCodeFilter === ALL_ERROR_FILTER_VALUE) {
+    params.error_only = 1;
+  } else {
+    const statusCode = parseStatusCodeFilter(f.statusCodeFilter);
+    if (statusCode !== undefined) params.status_code = statusCode;
+  }
+  Object.assign(params, toDateRangeParams(f.dateRange, true));
   if (f.actionTypeFilter && f.actionTypeFilter !== '全部') {
     params.action_type = f.actionTypeFilter;
   }
@@ -180,10 +187,13 @@ const Logs: React.FC<{ routerEp?: string }> = ({ routerEp }) => {
   const { themeMode } = useThemeStore();
   const _isLight = themeMode === 'light';
   const currencySymbol = settings?.currency?.currency_symbol || '$';
-  const statusCodeOptions = STATUS_CODE_FILTER_VALUES.map((value) => ({
-    value,
-    label: t(`logs.status_code_${value}`),
-  }));
+  const statusCodeOptions = [
+    { value: ALL_ERROR_FILTER_VALUE, label: t('logs.status_code_all_error', '全部错误') },
+    ...STATUS_CODE_FILTER_VALUES.map((value) => ({
+      value,
+      label: t(`logs.status_code_${value}`),
+    })),
+  ];
   const [logs, setLogs] = useState<RequestLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [total, setTotal] = useState(0);
@@ -862,19 +872,21 @@ const Logs: React.FC<{ routerEp?: string }> = ({ routerEp }) => {
           />
           <RangePicker
             value={dateRange}
-            placeholder={[t('logs.start_date', '开始日期'), t('logs.end_date', '结束日期')]}
+            placeholder={[t('logs.start_date', '开始时间'), t('logs.end_date', '结束时间')]}
             onChange={(vals) => setDateRange(vals as [any, any] | null)}
+            showTime={{ format: 'HH:mm' }}
+            format="YYYY-MM-DD HH:mm"
             className="font-size-12"
-            style={{ width: screens.xs ? '100%' : undefined, fontSize: 12, height: 32 }}
+            style={{ width: screens.xs ? '100%' : 380, fontSize: 12, height: 32 }}
           />
           <Space size={8} style={{ marginLeft: screens.xs ? 0 : 'auto' }}>
             <Button type="primary" icon={<Search size={14} />} onClick={() => fetchLogs()} loading={loading} disabled={loading} style={{ height: 32, borderRadius: 6, fontSize: 12, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{t('logs.query', '查询')}</Button>
             <Button icon={<RefreshCw size={14} />} onClick={() => fetchLogs()} loading={loading} disabled={loading} style={{ height: 32, borderRadius: 6, fontSize: 12, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{t('common.refresh', '刷新')}</Button>
-            {user?.role === 'admin' && (
-              <Tooltip title={t('logs.export_tooltip', '根据当前筛选条件导出 CSV（上限10万条）')}>
-                <Button icon={<Download size={14} />} loading={exporting} disabled={loading} onClick={handleExport} style={{ height: 32, borderRadius: 6, fontSize: 12, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{t('logs.export', '导出')}</Button>
-              </Tooltip>
-            )}
+            <Tooltip title={user?.role === 'admin'
+              ? t('logs.export_tooltip', '根据当前筛选条件导出 CSV（上限10万条）')
+              : t('logs.export_tooltip_self', '导出我自己的日志 CSV（上限10万条）')}>
+              <Button icon={<Download size={14} />} loading={exporting} disabled={loading} onClick={handleExport} style={{ height: 32, borderRadius: 6, fontSize: 12, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{t('logs.export', '导出')}</Button>
+            </Tooltip>
           </Space>
         </div>
 

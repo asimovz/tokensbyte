@@ -77,6 +77,8 @@ pub struct CreateUserRequest {
     #[serde(default)]
     pub email: String,
     pub password: String,
+    /// 注册/建号昵称（选填，留空为 NULL）
+    pub nickname: Option<String>,
     pub group: Option<String>, // Keep for compatibility
     pub user_group: Option<String>,
     pub admin_group_id: Option<i64>,
@@ -224,6 +226,8 @@ pub struct EmailRegisterRequest {
     pub email: String,
     pub code: String,
     pub password: String,
+    /// 注册昵称（选填）
+    pub nickname: Option<String>,
     pub aff: Option<String>,
     /// 团队邀请码，注册后自动加入对应团队
     pub team: Option<String>,
@@ -235,6 +239,8 @@ pub struct MobileRegisterRequest {
     pub mobile: String,
     pub code: String,
     pub password: String,
+    /// 注册昵称（选填）
+    pub nickname: Option<String>,
     pub aff: Option<String>,
     /// 团队邀请码，注册后自动加入对应团队
     pub team: Option<String>,

@@ -135,12 +135,19 @@ pub async fn create_user(
     let balance = request.balance.unwrap_or(0.0);
     let gift_balance = request.gift_balance.unwrap_or(0.0);
     let pay_enabled = request.pay_enabled.unwrap_or(1);
+    // 管理员建号时昵称为可选，缺省仍为 NULL（列表回退到 username）
+    let nickname = request
+        .nickname
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
 
     let mut tx = state.db.pool.begin().await?;
 
     sqlx::query(
-        &state.db.format_query(r#"INSERT INTO users (id, uid, username, email, mobile, password_hash, role, user_group, admin_group_id, balance, gift_balance, pay_enabled, is_active, referred_by, referral_history)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)"#)
+        &state.db.format_query(r#"INSERT INTO users (id, uid, username, email, mobile, password_hash, role, user_group, admin_group_id, balance, gift_balance, pay_enabled, is_active, referred_by, referral_history, nickname)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)"#)
     )
     .bind(&user_id)
     .bind(&uid)
@@ -156,6 +163,7 @@ pub async fn create_user(
     .bind(pay_enabled)
     .bind(&referred_by)
     .bind(&referral_history)
+    .bind(&nickname)
     .execute(&mut *tx)
     .await?;
 
@@ -214,6 +222,43 @@ pub async fn update_user(
     let old_balance = user.balance;
     let old_gift_balance = user.gift_balance;
     let old_credit_limit = user.credit_limit;
+
+    // 管理员账号变更保护（避免绕过界面直接调接口改其他管理员）：
+    // 1) 目标是管理员时，操作者必须是超级管理员（库内 role=admin 且未绑定管理员分组）；
+    // 2) 目标是超级管理员时，禁止修改其角色与分组绑定，避免被降级或解绑架空。
+    if user.role == "admin" {
+        let operator: Option<(String, Option<i64>)> =
+            sqlx::query_as::<_, (String, Option<i64>)>(
+                &state
+                    .db
+                    .format_query("SELECT role, admin_group_id FROM users WHERE id = ?"),
+            )
+            .bind(&operator_id)
+            .fetch_optional(&state.db.pool)
+            .await?;
+        let is_super_operator = operator
+            .as_ref()
+            .map(|(role, group)| role == "admin" && group.is_none())
+            .unwrap_or(false);
+        if !is_super_operator {
+            return Err(AppError::Forbidden(
+                "仅超级管理员可修改管理员账号".to_string(),
+            ));
+        }
+        if user.admin_group_id.is_none() {
+            let changes_role = request
+                .role
+                .as_deref()
+                .map(|role| role != "admin")
+                .unwrap_or(false);
+            let changes_group = matches!(request.admin_group_id, Some(Some(_)));
+            if changes_role || changes_group {
+                return Err(AppError::Forbidden(
+                    "超级管理员的角色与管理员分组不允许修改".to_string(),
+                ));
+            }
+        }
+    }
     // 记录旧等级信息，用于变更时写日志
     let old_user_group = user.user_group.clone();
     let old_level_name: String = sqlx::query_scalar(
@@ -505,6 +550,49 @@ pub async fn delete_user(
         return Err(AppError::BadRequest(
             "不能删除当前登录的管理员账户".to_string(),
         ));
+    }
+
+    // 管理员账号删除保护：
+    // 1) 超级管理员（role=admin 且未绑定管理员分组）任何情况下都不可删除；
+    // 2) 删除其他管理员账号时，操作者也必须是超级管理员，
+    //    避免分组管理员互删，也避免绕过前端界面直接调接口越权删除。
+    let target: Option<(String, Option<i64>)> =
+        sqlx::query_as::<_, (String, Option<i64>)>(
+            &state
+                .db
+                .format_query("SELECT role, admin_group_id FROM users WHERE id = ?"),
+        )
+        .bind(&id)
+        .fetch_optional(&state.db.pool)
+        .await?;
+    let (target_role, target_group_id) =
+        target.ok_or_else(|| AppError::NotFound("用户不存在".to_string()))?;
+
+    if target_role == "admin" {
+        // 以库内实时数据为准，不信任 JWT 中的 role（防止降级后旧 token 仍可用）
+        let operator: Option<(String, Option<i64>)> =
+            sqlx::query_as::<_, (String, Option<i64>)>(
+                &state
+                    .db
+                    .format_query("SELECT role, admin_group_id FROM users WHERE id = ?"),
+            )
+            .bind(&claims.sub)
+            .fetch_optional(&state.db.pool)
+            .await?;
+        let is_super_operator = operator
+            .as_ref()
+            .map(|(role, group)| role == "admin" && group.is_none())
+            .unwrap_or(false);
+        if !is_super_operator {
+            return Err(AppError::Forbidden(
+                "仅超级管理员可删除管理员账号".to_string(),
+            ));
+        }
+        if target_group_id.is_none() {
+            return Err(AppError::Forbidden(
+                "超级管理员账号不允许删除".to_string(),
+            ));
+        }
     }
 
     // 0. 在事务开启前，先查出该用户在 plugin_assets 与 playground_assets 中上传的全部云端文件，

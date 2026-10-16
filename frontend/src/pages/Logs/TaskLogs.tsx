@@ -340,7 +340,7 @@ const TaskLogs: React.FC = () => {
       if (v.search_keyword && v.search_keyword.trim()) params.search_keyword = v.search_keyword.trim();
       if (v.user_id && v.user_id.trim()) params.user_id = v.user_id.trim();
       if (v.user_group) params.user_group = v.user_group;
-      Object.assign(params, toDateRangeParams(v.dateRange));
+      Object.assign(params, toDateRangeParams(v.dateRange, true));
 
       const res = await (request.get('/task_logs', { params, signal }) as any);
       if (!queryGuardRef.current.isCurrent(signal)) return;
@@ -404,7 +404,7 @@ const TaskLogs: React.FC = () => {
       if (v.search_keyword && v.search_keyword.trim()) params.search_keyword = v.search_keyword.trim();
       if (v.user_id && v.user_id.trim()) params.user_id = v.user_id.trim();
       if (v.user_group) params.user_group = v.user_group;
-      Object.assign(params, toDateRangeParams(v.dateRange));
+      Object.assign(params, toDateRangeParams(v.dateRange, true));
       const resp = await request.get('/task_logs/export', {
         params,
         responseType: 'blob',
@@ -728,15 +728,21 @@ const TaskLogs: React.FC = () => {
             <Input placeholder={t('logs.model_name', '模型名称')} prefix={<Search size={16} />} allowClear style={{ width: 180, fontSize: 12, height: 32 }} />
           </Form.Item>
           <Form.Item name="dateRange" noStyle>
-            <RangePicker className="font-size-12" style={{ fontSize: 12, height: 32 }} />
+            <RangePicker
+              showTime={{ format: 'HH:mm' }}
+              format="YYYY-MM-DD HH:mm"
+              placeholder={[t('logs.start_date', '开始时间'), t('logs.end_date', '结束时间')]}
+              className="font-size-12"
+              style={{ width: 380, fontSize: 12, height: 32 }}
+            />
           </Form.Item>
           <Button type="primary" htmlType="submit" icon={<Search size={14} />} loading={loading} disabled={loading} style={{ height: 32, borderRadius: 6, fontSize: 12, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{t('task_logs.query', '查询')}</Button>
           <Button icon={<RefreshCw size={14} />} onClick={() => fetchLogs(page, pageSize)} loading={loading} disabled={loading} style={{ height: 32, borderRadius: 6, fontSize: 12, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{t('common.refresh', '刷新')}</Button>
-          {isAdmin && (
-            <Tooltip title={t('logs.export_tooltip', '根据当前筛选条件导出 CSV（上限10万条）')}>
-              <Button icon={<Download size={14} />} loading={exporting} disabled={loading} onClick={handleExport} style={{ height: 32, borderRadius: 6, fontSize: 12, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{t('task_logs.export', '导出')}</Button>
-            </Tooltip>
-          )}
+          <Tooltip title={isAdmin
+            ? t('logs.export_tooltip', '根据当前筛选条件导出 CSV（上限10万条）')
+            : t('logs.export_tooltip_self', '导出我自己的日志 CSV（上限10万条）')}>
+            <Button icon={<Download size={14} />} loading={exporting} disabled={loading} onClick={handleExport} style={{ height: 32, borderRadius: 6, fontSize: 12, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{t('task_logs.export', '导出')}</Button>
+          </Tooltip>
         </Space>
       </Form>
     </div>

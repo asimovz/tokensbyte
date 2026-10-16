@@ -165,6 +165,8 @@ pub struct LogQuery {
     pub status: Option<String>,
     /// 精确 HTTP 状态码；可与 status=success/fail 叠加
     pub status_code: Option<i32>,
+    /// 1 = 仅错误日志（排除处理中 status_code=0 与 2xx/3xx）
+    pub error_only: Option<i32>,
     pub start_date: Option<String>,
     pub end_date: Option<String>,
     pub user_group: Option<String>,

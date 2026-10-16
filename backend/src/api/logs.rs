@@ -182,6 +182,11 @@ fn build_log_where(
         binds.push(code.to_string());
     }
 
+    if query.error_only.unwrap_or(0) == 1 {
+        // “全部错误”：排除处理中(0) 与 2xx/3xx 成功
+        sql.push_str(" AND l.status_code <> 0 AND NOT (l.status_code >= 200 AND l.status_code < 400)");
+    }
+
     if let Some(ref s) = query.start_date {
         push_created_at_bound(&mut sql, &mut binds, s, false);
     }
@@ -383,6 +388,53 @@ async fn fetch_logs_list_rows(
     q.fetch_all(&db.pool).await
 }
 
+/// 解析列表/导出共用的数据域：管理员可按目标用户过滤（UID/用户名自动解析），
+/// 普通用户仅能看自己（直接邀请的下级可额外过滤）。返回 `build_log_where` 的 allowed_target_user。
+async fn resolve_log_query_scope(
+    db: &crate::db::Database,
+    claims: &auth::Claims,
+    q: &mut LogQuery,
+) -> AppResult<bool> {
+    if claims.role == "admin" {
+        if let Some(ref user_id) = q.user_id {
+            if user_id != "unknown" {
+                q.user_id = Some(resolve_user_filter(db, user_id).await?);
+            }
+        }
+        return Ok(true);
+    }
+
+    if let Some(ref target_user_id) = q.user_id {
+        let my_uid: Option<String> =
+            sqlx::query_scalar(&db.format_query("SELECT uid FROM users WHERE id = ?"))
+                .bind(&claims.sub)
+                .fetch_optional(&db.pool)
+                .await?;
+        let my_uid = my_uid.unwrap_or_default();
+
+        if let Some(target_uuid) = lookup_user_id(db, target_user_id).await? {
+            let is_referral: bool = sqlx::query_scalar(
+                &db.format_query(
+                    "SELECT EXISTS(SELECT 1 FROM users WHERE id = ? AND (referred_by = ? OR referred_by = ?))",
+                ),
+            )
+            .bind(&target_uuid)
+            .bind(&claims.sub)
+            .bind(&my_uid)
+            .fetch_one(&db.pool)
+            .await?;
+
+            if is_referral {
+                q.user_id = Some(target_uuid);
+                return Ok(true);
+            }
+        }
+        q.user_id = None;
+    }
+
+    Ok(false)
+}
+
 pub async fn list_logs(
     State(state): State<Arc<AppState>>,
     Extension(claims): Extension<auth::Claims>,
@@ -393,45 +445,7 @@ pub async fn list_logs(
     let offset = (page - 1) * per_page;
 
     let mut q = query.clone();
-    let mut allowed_target_user = false;
-
-    if claims.role == "admin" {
-        allowed_target_user = true;
-        if let Some(ref user_id) = q.user_id {
-            if user_id != "unknown" {
-                q.user_id = Some(resolve_user_filter(&state.db, user_id).await?);
-            }
-        }
-    } else if let Some(ref target_user_id) = q.user_id {
-        let my_uid: Option<String> =
-            sqlx::query_scalar(&state.db.format_query("SELECT uid FROM users WHERE id = ?"))
-                .bind(&claims.sub)
-                .fetch_optional(&state.db.pool)
-                .await?;
-        let my_uid = my_uid.unwrap_or_default();
-
-        if let Some(target_uuid) = lookup_user_id(&state.db, target_user_id).await? {
-            let is_referral: bool = sqlx::query_scalar(
-                &state.db.format_query(
-                    "SELECT EXISTS(SELECT 1 FROM users WHERE id = ? AND (referred_by = ? OR referred_by = ?))",
-                ),
-            )
-            .bind(&target_uuid)
-            .bind(&claims.sub)
-            .bind(&my_uid)
-            .fetch_one(&state.db.pool)
-            .await?;
-
-            if is_referral {
-                allowed_target_user = true;
-                q.user_id = Some(target_uuid);
-            } else {
-                q.user_id = None;
-            }
-        } else {
-            q.user_id = None;
-        }
-    }
+    let allowed_target_user = resolve_log_query_scope(&state.db, &claims, &mut q).await?;
 
     let (where_clause, binds) = build_log_where(&claims, &q, allowed_target_user);
 
@@ -636,18 +650,12 @@ pub async fn export_logs(
     Extension(claims): Extension<auth::Claims>,
     Query(query): Query<LogQuery>,
 ) -> Result<Response, AppError> {
-    if claims.role != "admin" {
-        return Err(AppError::Forbidden("仅超级管理员可导出数据".to_string()));
-    }
+    let is_admin = claims.role == "admin";
 
     let mut q = query.clone();
-    if let Some(ref user_id) = q.user_id {
-        if user_id != "unknown" {
-            q.user_id = Some(resolve_user_filter(&state.db, user_id).await?);
-        }
-    }
+    let allowed_target_user = resolve_log_query_scope(&state.db, &claims, &mut q).await?;
 
-    let (where_clause, binds) = build_log_where(&claims, &q, true);
+    let (where_clause, binds) = build_log_where(&claims, &q, allowed_target_user);
     let total = fetch_logs_count(&state.db, &where_clause, &binds).await?;
 
     if total > EXPORT_LIMIT {
@@ -704,6 +712,12 @@ pub async fn export_logs(
         let user_uid: String = row.get(16);
         let sub_channel_name: Option<String> = row.get(17);
         let task_id: String = row.get(18);
+        // 普通用户导出仅含自己的日志，剔除渠道/子渠道/计费明细等内部定位信息
+        let (channel_name, sub_channel_name, billing_detail) = if is_admin {
+            (channel_name, sub_channel_name, billing_detail)
+        } else {
+            (None, None, None)
+        };
         let stream_label = match is_stream {
             Some(1) => "流",
             _ => "非流",

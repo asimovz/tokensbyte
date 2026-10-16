@@ -20,15 +20,32 @@ function rangeEnds(range: DayjsRange): [Dayjs, Dayjs] | null {
   return start && end ? [start, end] : null;
 }
 
-/** RangePicker → 绝对 ISO（日志/充值等半开 timestamptz 过滤）。 */
+/**
+ * RangePicker → 绝对 ISO（日志/充值等半开 timestamptz 过滤）。
+ * withTime=true 时保留用户选中的时分（分钟精度，终点覆盖所选整分钟）；
+ * 否则保持整天语义（00:00 ~ 23:59:59.999）。
+ */
 export function toDateRangeParams(
   range: DayjsRange,
+  withTime = false,
 ): { start_date?: string; end_date?: string } {
   const ends = rangeEnds(range);
   if (!ends) return {};
+  if (!withTime) {
+    return {
+      start_date: ends[0].startOf('day').toISOString(),
+      end_date: ends[1].endOf('day').toISOString(),
+    };
+  }
+  const [start, end] = ends;
+  // 后端终点为半开(<)，选中 15:30 需覆盖到 15:31:00
+  const endBound =
+    end.second() === 0 && end.millisecond() === 0
+      ? end.add(1, 'minute').startOf('minute')
+      : end;
   return {
-    start_date: ends[0].startOf('day').toISOString(),
-    end_date: ends[1].endOf('day').toISOString(),
+    start_date: start.toISOString(),
+    end_date: endBound.toISOString(),
   };
 }
 
