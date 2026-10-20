@@ -1,10 +1,10 @@
+7275df853103fe25718d7baf90a4f93bfde26c137275df8DESKTOP-83QIDS3\asimovz2026-10-17 00:00:36feat(logs,users): 时间筛选到时分/日志导出开放/全部错误 + 昵称选填与管理员权限收口
+622808b3df49b79346e44faf25a235bdcd276438622808basimovz2026-10-13 16:38:03Merge hotfix/custom-20260930: 模型折扣输入支持3位小数
+cf2f23dd306d2612f63f60b946cda4396343c26bcf2f23dasimovz2026-10-13 16:28:38fix(users): 模型折扣输入支持3位小数(precision=3/step=0.01/百分比预览1位)
+d6c6bc805b57d6ededc98ae9735c778210aedf49d6c6bc8DESKTOP-83QIDS3\asimovz2026-10-12 11:53:18feat(asset): 素材请求日志页面 + 用户列显示 username(admin_remark)
+bd928e3c78efafff6dd08eab750396063fb95b0dbd928e3asimovz2026-09-30 02:08:00feat(asset): 素材上游按渠道分组自动推导 (asset_route_by_group)
+6b222c019cff4caf9fda2fcd5dbefe006491d0776b222c0asimovz2026-09-29 05:09:12chore: 预防性忽略调试/测试产物与打包中间物
+a80f3547bc1bce66aa3c3e0f396784307fb256ada80f354asimovz2026-09-29 04:39:18feat(asset): 上游素材绑定支持火山 V4 签名鉴权；素材路由收敛为只认等级映射
+328b5f2bae0277c66b3d268733f5a3687ed20bdc328b5f2asimovz2026-09-04 10:59:42feat(asset): 素材透传路由解耦——用户等级映射 + 默认绑定兜底(四级路由)
 40c7676e851a947965894e20b80d0545866e1e7f40c7676asimovz2026-09-03 15:34:13feat(relay): 上游素材接口协议描述符(asset_api_profile)引擎与配置化适配
 243546c65c2ea6fc049c28de9668a5090cbf7761243546casimovz2026-08-31 19:02:53feat(models): 转发规则组合支持多选挂载
-a4c5fd8b458c7565bcfc6629c47e3f2ee92e11d6a4c5fd8asimovz2026-08-28 14:52:03feat(custom): 活体认证两接口透传白名单(已上线验证);归拢工作区存量定制改动;忽略构建产物与临时目录
-fdf89d867c5512e795deb14c77a0e2d0b88fbb12fdf89d8asimovz2026-08-28 14:52:03chore: 统一换行符为 LF (.gitattributes + 全库归一化),消除跨平台同步噪音
-4b63a877d244cb4b7e570050d8baa7cafa8db5cf4b63a87asimovz2026-08-28 01:09:52fix(api): BindingRow.channel_status 改为 i32,对齐 channel_configs.status INT4 与全库约定,修复绑定列表 500
-490ba0db5186206d3e61086d02295638ed054fb9490ba0dasimovz2026-08-28 01:04:34fix(db): upstream_asset_bindings.is_active 由 INTEGER 改为 BIGINT,修复 /api/v1/upstream-asset-bindings 查询 500(sqlx i64 与 INT4 不兼容);新增幂等迁移修正存量库
-45fc611031e748a42318aa3a4b69ed03aca8d4df45fc611asimovz2026-08-27 23:31:02fix(relay): body_transform bt_set merge分支对非对象源值静默丢弃,导致 move 到嵌套路径(如 ratio→metadata.ratio)时丢值;改为直接写入
-c5a613779b51a209e9850ee0610a95c8cc464293c5a6137asimovz2026-08-27 16:10:51fix(relay): 补回 body_transform 转换引擎(7570c99 上传时文件内容被旧版覆盖,导致编译产物缺失该功能)
-1afee888d2e3f18177142e0b31e9c80de70062541afee88tokensbyte-deploy2026-08-27 09:57:44feat(asset): 素材透传默认路由(按用户组→优先级自动选绑,可自动建绑定)+绑定管理CRUD接口+前端上游素材绑定页面; 修复native.rs format_query临时值E0716
-a54b56e5f462e0b30f4a51b0a18242cd4b2d5fcea54b56etokensbyte-deploy2026-08-27 03:01:23feat(relay): /api 素材接口新增 uar:<绑定ID> 上游透传分支（Bearer 透传，凭证读 upstream_asset_bindings+channel_configs，复用用户隔离/归属/日志；原 asset_manager AK/SK 分支不变）
