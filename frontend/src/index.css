@@ -987,3 +987,19 @@ tr.ant-table-measure-row .ant-table-cell {
 .ant-picker.font-size-12 .ant-picker-range-separator {
   font-size: 12px !important;
 }
+
+/* RangePicker 选中范围颜色调整（默认深灰改为蓝色系） */
+.ant-picker-cell-in-view.ant-picker-cell-range-start .ant-picker-cell-inner,
+.ant-picker-cell-in-view.ant-picker-cell-range-end .ant-picker-cell-inner {
+  background: #1677ff !important;
+  color: #fff !important;
+}
+
+.ant-picker-cell-in-view.ant-picker-cell-in-range::before {
+  background: #e6f4ff !important;
+}
+
+.ant-picker-cell-in-view.ant-picker-cell-range-start:not(.ant-picker-cell-range-start-single)::before,
+.ant-picker-cell-in-view.ant-picker-cell-range-end:not(.ant-picker-cell-range-end-single)::before {
+  background: #e6f4ff !important;
+}
