@@ -1019,14 +1019,9 @@ const Tokens: React.FC = () => {
                     marginBottom: '12px'
                   }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', paddingRight: '12px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <Text style={{ fontSize: '14px', fontWeight: 500, color: isLight ? '#09090b' : '#fafafa' }}>{t('tokens.high_availability_label')}</Text>
-                        <Tooltip title={t('tokens.high_availability_tooltip')}>
-                          <span style={{ cursor: 'pointer', color: isLight ? '#09090b' : '#fafafa', fontSize: '13px' }}>ⓘ</span>
-                        </Tooltip>
-                      </div>
+                      <Text style={{ fontSize: '14px', fontWeight: 500, color: isLight ? '#09090b' : '#fafafa' }}>{t('tokens.high_availability_label')}</Text>
                       <Text style={{ fontSize: '13px', lineHeight: '1.4', color: isLight ? '#71717a' : '#a1a1aa' }}>
-                        {t('tokens.high_availability_desc')}
+                        {t('tokens.high_availability_desc')}{t('tokens.high_availability_tooltip')}
                       </Text>
                     </div>
                     <Form.Item name="high_availability" valuePropName="checked" noStyle>
@@ -1282,12 +1277,7 @@ const Tokens: React.FC = () => {
                   marginBottom: ipFilterEnabled ? '12px' : '0px'
                 }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', paddingRight: '12px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <Text style={{ fontSize: '14px', fontWeight: 500, color: isLight ? '#09090b' : '#fafafa' }}>{t('tokens.ip_whitelist')}</Text>
-                      <Tooltip title={t('tokens.ip_whitelist_tooltip')}>
-                        <span style={{ cursor: 'pointer', color: isLight ? '#71717a' : '#a1a1aa', fontSize: '13px' }}>ⓘ</span>
-                      </Tooltip>
-                    </div>
+                    <Text style={{ fontSize: '14px', fontWeight: 500, color: isLight ? '#09090b' : '#fafafa' }}>{t('tokens.ip_whitelist')}</Text>
                     <Text style={{ fontSize: '13px', lineHeight: '1.4', color: isLight ? '#71717a' : '#a1a1aa' }}>
                       {t('tokens.ip_whitelist_desc')}
                     </Text>
@@ -1309,7 +1299,7 @@ const Tokens: React.FC = () => {
                       name="allowed_ips" 
                       style={{ marginBottom: 0 }}
                     >
-                      <Input placeholder="e.g. 192.168.1.1, 10.0.0.1" size="large" style={inputStyle} className="shadcn-input" />
+                      <Input placeholder="e.g. 192.168.1.1, 10.0.0.0/24" size="large" style={inputStyle} className="shadcn-input" />
                     </Form.Item>
                   </div>
                 )}
