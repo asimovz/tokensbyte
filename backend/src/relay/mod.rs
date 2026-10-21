@@ -26,6 +26,8 @@ pub mod stream;
 pub mod task;
 pub mod token_quota;
 pub mod upstream_headers;
+// 用户级安全限制：IP 白名单（含 CIDR）+ 用户×模型 RPM，60s TTL 缓存供中继热路径读取
+pub mod user_limits;
 pub mod url_utils;
 pub mod usage_extractor;
 pub mod usage_stats;

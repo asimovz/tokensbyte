@@ -11,7 +11,7 @@ use crate::models::{ApiToken, CreateTokenRequest, TokenListResponse, UpdateToken
 use crate::time_system::DbTs;
 use crate::AppState;
 use axum::{
-    extract::{Extension, Path, State},
+    extract::{Extension, Path, Query, State},
     Json,
 };
 use std::sync::Arc;
@@ -51,6 +51,39 @@ fn make_token_kid(user_uid: &str) -> String {
     format!("{}{}", uid_suffix, random_part)
 }
 
+/// 列表/更新类响应统一返回掩码密钥：前 8 + `••••` + 后 4。
+/// 完整密钥只在 create_token（签发时一次性下发）与 reveal_token（验密）中出现。
+fn mask_token_key(key: &str) -> String {
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() <= 12 {
+        return "••••".to_string();
+    }
+    let head: String = chars[..8].iter().collect();
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    format!("{}••••{}", head, tail)
+}
+
+fn mask_tokens(tokens: &mut [ApiToken]) {
+    for t in tokens.iter_mut() {
+        t.token_key = mask_token_key(&t.token_key);
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct TokenListQuery {
+    /// "1" / "true" 时返回完整密钥。仅创作中心令牌选择器使用（它需要拿密钥直接发请求），
+    /// 令牌管理页与后台列表不传，因此默认拿到的是掩码。
+    #[serde(default)]
+    pub full: Option<String>,
+}
+
+fn wants_full_key(query: &TokenListQuery) -> bool {
+    matches!(
+        query.full.as_deref(),
+        Some("1") | Some("true") | Some("yes")
+    )
+}
+
 async fn enrich_token_period_usage(state: &AppState, tokens: &mut [ApiToken]) {
     if tokens.is_empty() {
         return;
@@ -83,6 +116,7 @@ async fn enrich_token_period_usage(state: &AppState, tokens: &mut [ApiToken]) {
 pub async fn list_tokens(
     State(state): State<Arc<AppState>>,
     Extension(claims): Extension<auth::Claims>,
+    Query(query): Query<TokenListQuery>,
 ) -> AppResult<Json<TokenListResponse>> {
     let mut tokens: Vec<ApiToken> = sqlx::query_as(
         &state
@@ -94,6 +128,9 @@ pub async fn list_tokens(
     .await?;
 
     enrich_token_period_usage(&state, &mut tokens).await;
+    if !wants_full_key(&query) {
+        mask_tokens(&mut tokens);
+    }
     let total = tokens.len() as i64;
     Ok(Json(TokenListResponse {
         data: tokens,
@@ -103,6 +140,7 @@ pub async fn list_tokens(
 
 pub async fn list_all_tokens(
     State(state): State<Arc<AppState>>,
+    Query(query): Query<TokenListQuery>,
 ) -> AppResult<Json<TokenListResponse>> {
     let mut tokens: Vec<ApiToken> = sqlx::query_as(
         &state
@@ -113,6 +151,9 @@ pub async fn list_all_tokens(
     .await?;
 
     enrich_token_period_usage(&state, &mut tokens).await;
+    if !wants_full_key(&query) {
+        mask_tokens(&mut tokens);
+    }
     let total = tokens.len() as i64;
     Ok(Json(TokenListResponse {
         data: tokens,
@@ -333,6 +374,7 @@ pub async fn update_token(
     .await?;
 
     enrich_token_period_usage(&state, std::slice::from_mut(&mut token)).await;
+    token.token_key = mask_token_key(&token.token_key);
     Ok(Json(token))
 }
 
@@ -463,5 +505,6 @@ pub async fn reset_token_usage(
     .await?;
 
     enrich_token_period_usage(&state, std::slice::from_mut(&mut updated)).await;
+    updated.token_key = mask_token_key(&updated.token_key);
     Ok(Json(updated))
 }

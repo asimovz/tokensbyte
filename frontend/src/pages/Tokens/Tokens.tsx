@@ -381,18 +381,20 @@ const Tokens: React.FC = () => {
           </Text>
         ) : (
           <Text style={{ fontFamily: 'monospace', fontSize: 13, color: themeToken.colorText, letterSpacing: '0.5px' }}>
-            {key.substring(0, 10)}<span style={{color: '#666', margin: '0 4px'}}>••••••••</span>{key.substring(key.length - 6)}
+            {key}
           </Text>
         )}
-        <Tooltip title={copiedId === record.id ? t('tokens.copied', '已复制!') : t('tokens.copy_hint')}>
-          <Button 
-            type="text" 
-            icon={copiedId === record.id ? <CheckOutlined style={{ color: themeToken.colorText }} /> : <CopyOutlined />} 
-            size="small" 
-            onClick={() => handleCopy(isRevealed ? revealedKeys[record.id] : key, record.id)} 
-            style={{ color: copiedId === record.id ? themeToken.colorText : '#888', marginLeft: 8 }} 
-          />
-        </Tooltip>
+        {isRevealed && (
+          <Tooltip title={copiedId === record.id ? t('tokens.copied', '已复制!') : t('tokens.copy_hint')}>
+            <Button
+              type="text"
+              icon={copiedId === record.id ? <CheckOutlined style={{ color: themeToken.colorText }} /> : <CopyOutlined />}
+              size="small"
+              onClick={() => handleCopy(revealedKeys[record.id], record.id)}
+              style={{ color: copiedId === record.id ? themeToken.colorText : '#888', marginLeft: 8 }}
+            />
+          </Tooltip>
+        )}
         <Tooltip title={isRevealed ? t('tokens.hide_key', '隐藏密钥') : t('tokens.view_key', '查看完整密钥')}>
           <Button 
             type="text" 
@@ -662,9 +664,10 @@ const Tokens: React.FC = () => {
               pagination={{ pageSize: 10 }}
               renderCard={(record: any) => {
                 const isRevealed = !!revealedKeys[record.id];
-                const displayedKey = isRevealed 
-                  ? revealedKeys[record.id] 
-                  : (record.token_key.length > 8 ? `...${record.token_key.slice(-6)}` : record.token_key);
+                // 未验密时后端下发的就是掩码（前8 + •••• + 后4），直接展示
+                const displayedKey = isRevealed
+                  ? revealedKeys[record.id]
+                  : record.token_key;
 
                 const cardTitle = (
                   <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -680,7 +683,7 @@ const Tokens: React.FC = () => {
                         whiteSpace: isRevealed ? 'normal' : 'nowrap',
                         display: 'block'
                       }}
-                      onClick={() => handleCopy(isRevealed ? revealedKeys[record.id] : record.token_key, record.id)}
+                      onClick={() => (isRevealed ? handleCopy(revealedKeys[record.id], record.id) : handleRevealClick(record.id))}
                     >
                       {displayedKey}
                     </Text>
@@ -692,15 +695,17 @@ const Tokens: React.FC = () => {
 
                 const cardExtra = (
                   <Space size={2} align="center">
-                    <Tooltip title={copiedId === record.id ? t('tokens.copied', '已复制!') : t('tokens.copy_hint')}>
-                      <Button 
-                        type="text" 
-                        size="small" 
-                        icon={copiedId === record.id ? <CheckOutlined style={{ color: themeToken.colorText }} /> : <CopyOutlined style={{ fontSize: 15 }} />} 
-                        onClick={() => handleCopy(isRevealed ? revealedKeys[record.id] : record.token_key, record.id)}
-                        style={{ color: copiedId === record.id ? themeToken.colorText : undefined }}
-                      />
-                    </Tooltip>
+                    {isRevealed && (
+                      <Tooltip title={copiedId === record.id ? t('tokens.copied', '已复制!') : t('tokens.copy_hint')}>
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={copiedId === record.id ? <CheckOutlined style={{ color: themeToken.colorText }} /> : <CopyOutlined style={{ fontSize: 15 }} />}
+                          onClick={() => handleCopy(revealedKeys[record.id], record.id)}
+                          style={{ color: copiedId === record.id ? themeToken.colorText : undefined }}
+                        />
+                      </Tooltip>
+                    )}
                     <Tooltip title={isRevealed ? t('tokens.hide_key', '隐藏密钥') : t('tokens.view_key', '查看完整密钥')}>
                       <Button 
                         type="text" 

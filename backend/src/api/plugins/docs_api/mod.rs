@@ -1153,32 +1153,7 @@ curl -X POST https://{{domain}}/v1/video/generations \
             ]
         ),
         (
-            "8.站点功能API",
-            "site-api",
-            80,
-            vec![
-                (
-                    "站点API概述与认证方式",
-                    "site-api-overview",
-                    10,
-                    "# 站点 API 概述与认证方式\n\n欢迎使用 TokensByte 平台站点功能 API。除了通过统一的 AI 路由调用各大模型厂商外，系统还向开发者开放了管理 API，用于集成或二次开发，以管理 API 令牌、查询使用日志、用户钱包及状态等。\n\n### 1. 接口基础地址 (Base URL)\n所有站点功能 API 的基准请求地址为：\n```bash\nhttps://{{domain}}/api/v1\n```\n*注：公共路由与登录接口同样位于 `/api/v1` 目录下。*\n\n### 2. 身份认证机制\n除公开或注册接口外，所有站点管理 API 均需要经过严格的 JSON Web Token (JWT) 身份校验。请按以下流程进行认证：\n\n#### 第一步：登录并获取临时 JWT 令牌\n* **请求路径**: `/api/v1/auth/login`\n* **请求方式**: `POST`\n* **请求体示例**:\n```json\n{\n  \"username\": \"您的用户名或邮箱\",\n  \"password\": \"您的登录密码\",\n  \"login_type\": \"username\"\n}\n```\n* `login_type` 为可选字段，可选值为 `\"username\"`、`\"email\"` 或 `\"mobile\"`。默认为 `\"username\"`。\n\n* **响应体示例**:\n```json\n{\n  \"token\": \"eyJhbGciOi...\",\n  \"user\": {\n    \"id\": \"1\",\n    \"username\": \"user1\",\n    \"role\": \"user\",\n    \"email\": \"user@example.com\",\n    \"is_active\": 1\n  }\n}\n```\n\n#### 第二步：在 HTTP 请求头部携带 JWT 令牌\n在后续所有需要鉴权的 API 请求中，于 HTTP 请求头部添加标准的 Authorization 令牌：\n```http\nAuthorization: Bearer 您的_JWT_token_字符串\n```\n\n> [!IMPORTANT]\n> 此 JWT 令牌具有一定的时效性，主要用于前端交互或短期集成。若您需要用于持续请求大模型，请使用 **API 令牌 (Token)** 管理接口来创建和使用长期静态 Key。"
-                ),
-                (
-                    "用户与钱包API",
-                    "site-api-user",
-                    20,
-                    "# 用户与钱包 API\n\n您可以使用这些接口获取已登录用户的个人基本信息、查询钱包余额与消费统计、查看充值历史记录，或提取/划转推荐收益佣金。\n\n### 1. 获取个人资料 (Profile)\n* **路径**: `/api/v1/user/profile`\n* **请求方式**: `GET`\n* **响应体示例**:\n```json\n{\n  \"id\": \"1\",\n  \"username\": \"user1\",\n  \"email\": \"user@example.com\",\n  \"mobile\": \"13800000000\",\n  \"role\": \"user\",\n  \"user_group\": \"default\",\n  \"is_active\": 1,\n  \"created_at\": \"2026-06-01T12:00:00Z\"\n}\n```\n\n### 2. 获取钱包统计与余额 (Wallet)\n* **路径**: `/api/v1/user/wallet`\n* **请求方式**: `GET`\n* **响应体示例**:\n```json\n{\n  \"balance\": 500.00,\n  \"spent\": 24.50,\n  \"affiliate_commission\": 15.00,\n  \"user_level\": \"VIP 1\",\n  \"discount_rate\": 0.95\n}\n```\n\n### 3. 获取充值历史记录\n* **路径**: `/api/v1/user/recharge_records`\n* **请求方式**: `GET`\n* **响应体示例**:\n```json\n{\n  \"data\": [\n    {\n      \"id\": \"1001\",\n      \"amount\": 100.00,\n      \"method\": \"wechat\",\n      \"status\": \"success\",\n      \"created_at\": \"2026-06-15T09:30:00Z\"\n    }\n  ],\n  \"total\": 1\n}\n```\n\n### 4. 提取/划转佣金\n将推荐注册/消费产生的高额佣金收益，划转提取至您的账户余额用于消费。\n* **路径**: `/api/v1/user/affiliate/transfer`\n* **请求方式**: `POST`\n* **请求体示例**:\n```json\n{\n  \"amount\": 10.00\n}\n```\n* **响应体示例**:\n```json\n{\n  \"message\": \"Commission transferred successfully\",\n  \"new_balance\": 510.00,\n  \"remaining_commission\": 5.00\n}\n```"
-                ),
-                (
-                    "令牌与使用日志API",
-                    "site-api-tokens-logs",
-                    30,
-                    "# 令牌与使用日志 API\n\n用于对您名下了 API 令牌（API Keys）进行增删改查，以及查询大模型调用日志或异步任务执行状态。\n\n### 1. 查询令牌列表\n* **路径**: `/api/v1/tokens`\n* **请求方式**: `GET`\n* **响应体示例**:\n```json\n{\n  \"data\": [\n    {\n      \"id\": 5,\n      \"name\": \"测试Key\",\n      \"kid\": \"usr123987\",\n      \"quota_limit\": 1000.0,\n      \"used_quota\": 5.23,\n      \"is_active\": 1,\n      \"created_at\": \"2026-06-20T10:00:00Z\"\n    }\n  ],\n  \"total\": 1\n}\n```\n\n### 2. 创建 API 令牌\n* **路径**: `/api/v1/tokens`\n* **请求方式**: `POST`\n* **请求体参数说明**:\n  * `name`: 令牌名称 (长度限24字内)\n  * `quota_limit`: 额度上限 (可选，为空表示无限)\n  * `allowed_models`: 允许调用的模型列表 (可选，`[\"gpt-4o\"]`)\n  * `allowed_ips`: 绑定的白名单 IP (可选，逗号分隔)\n  * `rps_limit` / `rpm_limit`: 每秒/每分钟请求限频 (可选)\n* **请求体示例**:\n```json\n{\n  \"name\": \"生图Key\",\n  \"quota_limit\": 500.0,\n  \"allowed_models\": [\"gpt-4o\", \"claude-3-5-sonnet-20241022\"],\n  \"allowed_ips\": \"192.168.1.1,10.0.0.1\",\n  \"rps_limit\": 10,\n  \"rpm_limit\": 100\n}\n```\n* **响应体示例**:\n```json\n{\n  \"id\": 6,\n  \"name\": \"生图Key\",\n  \"token_key\": \"sk-ProjX82...\",\n  \"quota_limit\": 500.0,\n  \"is_active\": 1\n}\n```\n*注：新令牌的完整明文 Key (`token_key`) 仅在创建成功时返回一次。*\n\n### 3. 查看令牌密钥明文 (Reveal)\n* **路径**: `/api/v1/tokens/{id}/reveal`\n* **请求方式**: `POST`\n* **响应体示例**:\n```json\n{\n  \"token_key\": \"sk-your_full_api_key_value_here\"\n}\n```\n\n### 4. 删除 API 令牌\n* **路径**: `/api/v1/tokens/{id}`\n* **请求方式**: `DELETE`\n\n### 5. 查询大模型使用日志\n* **路径**: `/api/v1/logs`\n* **请求方式**: `GET`\n* **常用 Query 参数**: `page`, `per_page`, `model`, `status` (`success`/`fail`), `start_date`, `end_date`\n* **响应体示例**:\n```json\n{\n  \"data\": [\n    {\n      \"log_id\": \"log_xyz123\",\n      \"model\": \"gpt-4o\",\n      \"prompt_tokens\": 15,\n      \"completion_tokens\": 20,\n      \"cost\": 0.0007,\n      \"status_code\": 200,\n      \"created_at\": \"2026-06-21T15:20:00Z\"\n    }\n  ],\n  \"total\": 1,\n  \"total_cost\": 0.0007,\n  \"success_count\": 1,\n  \"fail_count\": 0\n}\n```\n\n### 6. 查询异步任务日志 (视频/画质等)\n* **路径**: `/api/v1/task_logs`\n* **请求方式**: `GET`\n* **接口操作**: 支持调用 `POST /api/v1/task_logs/{log_id}/sync` 手动同步任务状态，或 `POST /api/v1/task_logs/{log_id}/cancel` 取消执行中的异步任务。"
-                )
-            ]
-        ),
-        (
-            "9.最佳实践",
+            "8.最佳实践",
             "best-practices",
             90,
             vec![(

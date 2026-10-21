@@ -131,17 +131,11 @@ pub fn get_category_translations(slug: &str) -> Vec<(&'static str, &'static str)
             ("ko", "7. 문제 해결"),
             ("vi", "7. Khắc phục sự cố"),
         ],
-        "site-api" => vec![
-            ("en", "8. Site Functions API"),
-            ("ja", "8. サイト機能 API"),
-            ("ko", "8. 사이트 기능 API"),
-            ("vi", "8. API chức năng trang web"),
-        ],
         "best-practices" => vec![
-            ("en", "9. Best Practices"),
-            ("ja", "9. ベストプラクティス"),
-            ("ko", "9. 베스트 프랙티스"),
-            ("vi", "9. Thực hành tốt nhất"),
+            ("en", "8. Best Practices"),
+            ("ja", "8. ベストプラクティス"),
+            ("ko", "8. 베스트 프랙티스"),
+            ("vi", "8. Thực hành tốt nhất"),
         ],
         _ => vec![],
     }
@@ -477,72 +471,6 @@ pub fn get_article_translations(slug: &str) -> Vec<ArticleTranslation> {
                 lang: "vi",
                 title: "Mã lỗi cổng thông tin phổ biến và khắc phục sự cố",
                 content: include_str!("vi/error-codes.md"),
-            },
-        ],
-        "site-api-overview" => vec![
-            ArticleTranslation {
-                lang: "en",
-                title: "Site API Overview & Authentication",
-                content: include_str!("en/site-api-overview.md"),
-            },
-            ArticleTranslation {
-                lang: "ja",
-                title: "サイト API 概要と認証",
-                content: include_str!("ja/site-api-overview.md"),
-            },
-            ArticleTranslation {
-                lang: "ko",
-                title: "사이트 API 개요 및 인증",
-                content: include_str!("ko/site-api-overview.md"),
-            },
-            ArticleTranslation {
-                lang: "vi",
-                title: "Tổng quan về API Trang web & Xác thực",
-                content: include_str!("vi/site-api-overview.md"),
-            },
-        ],
-        "site-api-user" => vec![
-            ArticleTranslation {
-                lang: "en",
-                title: "User Profile & Wallet APIs",
-                content: include_str!("en/site-api-user.md"),
-            },
-            ArticleTranslation {
-                lang: "ja",
-                title: "ユーザープロフィールとウォレット API",
-                content: include_str!("ja/site-api-user.md"),
-            },
-            ArticleTranslation {
-                lang: "ko",
-                title: "사용자 프로필 및 지갑 API",
-                content: include_str!("ko/site-api-user.md"),
-            },
-            ArticleTranslation {
-                lang: "vi",
-                title: "Hồ sơ Người dùng & API Ví",
-                content: include_str!("vi/site-api-user.md"),
-            },
-        ],
-        "site-api-tokens-logs" => vec![
-            ArticleTranslation {
-                lang: "en",
-                title: "API Tokens & Usage Logs APIs",
-                content: include_str!("en/site-api-tokens-logs.md"),
-            },
-            ArticleTranslation {
-                lang: "ja",
-                title: "API トークンと使用ログ API",
-                content: include_str!("ja/site-api-tokens-logs.md"),
-            },
-            ArticleTranslation {
-                lang: "ko",
-                title: "API 토큰 및 사용 로그 API",
-                content: include_str!("ko/site-api-tokens-logs.md"),
-            },
-            ArticleTranslation {
-                lang: "vi",
-                title: "API Quản lý Token & Nhật ký Sử dụng",
-                content: include_str!("vi/site-api-tokens-logs.md"),
             },
         ],
         "chat" => vec![ArticleTranslation {

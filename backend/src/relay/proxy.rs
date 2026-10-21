@@ -296,6 +296,7 @@ pub fn action_type_from_path(endpoint: &str) -> Option<&'static str> {
 }
 
 /// Token 模型权限校验（渠道选择 **之前** 调用，快速拦截未授权模型）。
+/// 顺带强制「用户×模型」RPM 限流：令牌级 RPM 在中间件已扣，此处为用户维度收紧。
 /// `action_type`: 调用方已知类别（如 "图片"），失败落库时透传，保证日志 Tab 定位正确。
 pub async fn check_model_permission(
     state: &Arc<AppState>,
@@ -321,6 +322,30 @@ pub async fn check_model_permission(
         .await;
         return Err(AppError::Forbidden(msg));
     }
+
+    let rpm = state
+        .user_limits
+        .get(&state.db, &token.user_id)
+        .await
+        .rpm_for_model(model);
+    if rpm > 0 && !state.rate_limiter.check_user_model_rpm(&token.user_id, model, rpm) {
+        let msg = format!("模型 {} 超出用户级速率限制（{} RPM）", model, rpm);
+        record_error_log(
+            state,
+            &token.user_id,
+            None,
+            Some(token.id),
+            model,
+            429,
+            endpoint,
+            &msg,
+            None,
+            action_type,
+        )
+        .await;
+        return Err(AppError::TooManyRequests(msg));
+    }
+
     Ok(())
 }
 

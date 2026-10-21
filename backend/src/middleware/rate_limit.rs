@@ -21,6 +21,9 @@ pub struct GlobalRateLimiter {
     /// 登录/管理登录按 IP 限流（每分钟）
     login_ip_limits:
         DashMap<String, Arc<RateLimiter<NotKeyed, InMemoryState, governor::clock::DefaultClock>>>,
+    /// 用户×模型 RPM（仅对配了限制的「用户+模型」建桶）
+    user_model_rpm_limits:
+        DashMap<String, Arc<RateLimiter<NotKeyed, InMemoryState, governor::clock::DefaultClock>>>,
     /// 兑换码：IP 短窗计数（次数, 窗口起点）
     redeem_ip_windows: DashMap<String, (u32, Instant)>,
     /// 兑换码：IP 封禁至（Instant）
@@ -33,6 +36,7 @@ impl GlobalRateLimiter {
             token_rps_limits: DashMap::new(),
             token_rpm_limits: DashMap::new(),
             login_ip_limits: DashMap::new(),
+            user_model_rpm_limits: DashMap::new(),
             redeem_ip_windows: DashMap::new(),
             redeem_ip_bans: DashMap::new(),
         }
@@ -140,6 +144,28 @@ impl GlobalRateLimiter {
             Arc::new(RateLimiter::direct(quota))
         });
 
+        limiter.check().is_ok()
+    }
+
+    /// 用户×模型 RPM 限流。rpm <= 0 视为不限直接放行；
+    /// key 包含 rpm 数值，管理员调高/调低后立即生效而不复用旧桶。
+    pub fn check_user_model_rpm(&self, user_id: &str, model: &str, rpm: i64) -> bool {
+        if rpm <= 0 {
+            return true;
+        }
+        let rpm_u32 = rpm.min(u32::MAX as i64) as u32;
+        let key = format!("{}|{}|{}", user_id, model, rpm_u32);
+        // 防无界增长（用户×模型组合）；超过阈值整体清空，活跃桶在下一次请求重建
+        if self.user_model_rpm_limits.len() > 20_000 {
+            self.user_model_rpm_limits.clear();
+        }
+        let limiter = self
+            .user_model_rpm_limits
+            .entry(key)
+            .or_insert_with(|| {
+                let quota = Quota::per_minute(NonZeroU32::new(rpm_u32).unwrap());
+                Arc::new(RateLimiter::direct(quota))
+            });
         limiter.check().is_ok()
     }
 }

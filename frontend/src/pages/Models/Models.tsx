@@ -2058,7 +2058,7 @@ const Models: React.FC = () => {
                   message.error(info.errorFields[0].errors[0]);
                 }
               }} 
-              initialValues={{ is_active: true, enable_log_content: 0, pre_deduction: 0 }}
+              initialValues={{ is_active: true, enable_log_content: 1, pre_deduction: 0 }}
             >
               {/* Hidden inputs to preserve form data for the custom fields */}
               <Form.Item name="provider_id" hidden><Input /></Form.Item>
@@ -2285,12 +2285,12 @@ const Models: React.FC = () => {
                            </Form.Item>
                        </Col>
                        <Col span={12}>
-                           <Form.Item name="enable_log_content" label={<Text strong>记录上下文</Text>} valuePropName="checked" initialValue={false}>
+                           <Form.Item name="enable_log_content" label={<Text strong>记录上下文</Text>} valuePropName="checked" initialValue={true}>
                               <Switch />
                            </Form.Item>
                        </Col>
                        <Col span={12}>
-                           <Form.Item name="site_discount_enabled" label={<Text strong>折扣限价</Text>} valuePropName="checked" initialValue={true}>
+                           <Form.Item name="site_discount_enabled" label={<Text strong>折扣限价</Text>} valuePropName="checked" initialValue={false}>
                               <Switch checkedChildren="开启" unCheckedChildren="关闭" />
                            </Form.Item>
                        </Col>

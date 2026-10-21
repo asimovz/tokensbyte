@@ -158,7 +158,7 @@ pub async fn create_model(
 
     let pre_deduction = req.pre_deduction.unwrap_or(0.0);
     let site_discount = req.site_discount.unwrap_or(1.0);
-    let site_discount_enabled = req.site_discount_enabled.unwrap_or(1);
+    let site_discount_enabled = req.site_discount_enabled.unwrap_or(0);
     if site_discount_enabled == 1 && site_discount <= 0.0 {
         return Err(crate::error::AppError::BadRequest(
             "开启折扣限价时，折扣限价倍率必须大于 0".to_string(),
@@ -171,7 +171,7 @@ pub async fn create_model(
     let model_id_alias = req.model_id_alias.unwrap_or_default();
 
     let is_active = req.is_active.unwrap_or(1);
-    let enable_log_content = req.enable_log_content.unwrap_or(0);
+    let enable_log_content = req.enable_log_content.unwrap_or(1);
 
     let new_id = sqlx::query(
         &state.db.format_query(r#"INSERT INTO models (mid, name, model_id, original_id, model_id_alias, provider_id, api_provider_id, type_id, group_ratios, forward_rule_ids, billing_rule_id, pre_deduction, site_discount, site_discount_enabled, global_discount, global_discount_enabled, is_active, enable_log_content, is_system, logo, remark, description, feature_attributes)
