@@ -478,7 +478,8 @@ pub async fn unbind_third_party(
 
     // 密码校验
     if !auth::verify_password(&request.password, &user.password_hash)? {
-        return Err(AppError::AuthFailed("密码错误".to_string()));
+        // 403 而非 401：登录态有效，只是二次校验密码错了，返回 401 会被前端当成登录过期跳登录页
+        return Err(AppError::Forbidden("密码错误".to_string()));
     }
 
     match bind_type.as_str() {
