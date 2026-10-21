@@ -375,7 +375,6 @@ const Tokens: React.FC = () => {
         {isRevealed ? (
           <Text
             style={{ fontFamily: 'monospace', fontSize: 13, color: themeToken.colorText, letterSpacing: '0.5px', userSelect: 'all' }}
-            copyable={{ text: revealedKeys[record.id] }}
           >
             {revealedKeys[record.id]}
           </Text>
