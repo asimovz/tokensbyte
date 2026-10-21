@@ -446,7 +446,9 @@ pub async fn reveal_token(
     .await?;
 
     if !auth::verify_password(&request.password, &password_hash)? {
-        return Err(AppError::AuthFailed("密码错误".to_string()));
+        // 用 403 而非 401：此处登录态是有效的，只是二次校验密码错了。
+        // 返回 401 会被前端拦截器当成登录态过期，清 token 并跳转登录页。
+        return Err(AppError::Forbidden("密码错误".to_string()));
     }
 
     Ok(Json(serde_json::json!({
