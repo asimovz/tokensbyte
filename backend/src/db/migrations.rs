@@ -3468,13 +3468,16 @@ macro_rules! pg_migration_blocks {
         "UPDATE plugin_docs_intl SET title = '8. Thực hành tốt nhất' WHERE lang = 'vi' AND title LIKE '9.%' AND doc_id IN (SELECT id FROM plugin_docs WHERE slug = 'best-practices')"
     );
 
-    // ── 用户级安全限制：IP 白名单（含 CIDR）+ 用户×模型 RPM ──
-    // 令牌级限制依旧生效，两列只做「用户维度」的补充收紧；空值/0 一律视为不限，存量用户行为不变。
+    // ── 用户级安全限制：IP 白名单（含 CIDR）──
+    // 令牌级限制依旧生效，此列只做「用户维度」的补充收紧；空值视为不限，存量用户行为不变。
     once_migration!(pool, "user_ip_whitelist_and_model_rpm_v1",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS allowed_ips TEXT",
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS model_rpm_limits TEXT",
-        "COMMENT ON COLUMN users.allowed_ips IS '用户级IP白名单，逗号分隔单IP或CIDR网段；空=不限。与令牌级白名单需同时通过'",
-        "COMMENT ON COLUMN users.model_rpm_limits IS '用户×模型RPM限制(JSON: {\"模型名\": rpm, \"*\": rpm})，0或不填=不限；与令牌级RPM取更严格'"
+        "COMMENT ON COLUMN users.allowed_ips IS '用户级IP白名单，逗号分隔单IP或CIDR网段；空=不限。与令牌级白名单需同时通过'"
+    );
+
+    // 用户×模型 RPM 已取消（限流仍由令牌级 rpm_limit 承担），回收列。
+    once_migration!(pool, "drop_user_model_rpm_v1",
+        "ALTER TABLE users DROP COLUMN IF EXISTS model_rpm_limits"
     );
 
     tracing::info!("PostgreSQL AnyPool migrations completed successfully");

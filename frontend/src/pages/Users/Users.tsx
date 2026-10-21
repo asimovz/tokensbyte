@@ -227,12 +227,6 @@ const Users: React.FC = () => {
   /** 已选用于设置折扣的模型 mid 列表 */
   const [discountMids, setDiscountMids] = useState<string[]>([]);
 
-  // ── 安全限制 Tab 相关状态 ──
-  /** 当前编辑用户的模型 RPM 数据: {model_id: rpm}，0=不限 */
-  const [rpmMap, setRpmMap] = useState<Record<string, number>>({});
-  /** 已选用于设置 RPM 的模型 ID 列表（含通配符 *） */
-  const [rpmModels, setRpmModels] = useState<string[]>([]);
-
   // ── 等级变更历史 ──
   const [levelLogs, setLevelLogs] = useState<any[]>([]);
   const [levelLogsLoading, setLevelLogsLoading] = useState(false);
@@ -393,10 +387,6 @@ const Users: React.FC = () => {
     const md: Record<string, number> = record.model_discounts ? (() => { try { return JSON.parse(record.model_discounts); } catch { return {}; } })() : {};
     setDiscountMap(md);
     setDiscountMids(Object.keys(md));
-    // 初始化用户×模型 RPM 数据
-    const rpm: Record<string, number> = record.model_rpm_limits ? (() => { try { return JSON.parse(record.model_rpm_limits); } catch { return {}; } })() : {};
-    setRpmMap(rpm);
-    setRpmModels(Object.keys(rpm));
     if (!isAdminPage) {
       loadUserKyc(record.id);
     } else {
@@ -474,13 +464,6 @@ const Users: React.FC = () => {
           }
         }
         payload.model_discounts = Object.keys(validDiscounts).length > 0 ? JSON.stringify(validDiscounts) : '';
-        // 保存用户×模型 RPM：仅保留已填数值且 > 0 的模型（0/不填 = 不限）
-        const validRpm: Record<string, number> = {};
-        for (const m of rpmModels) {
-          const v = rpmMap[m];
-          if (v !== undefined && v !== null && v > 0) validRpm[m.trim()] = v;
-        }
-        payload.model_rpm_limits = Object.keys(validRpm).length > 0 ? JSON.stringify(validRpm) : '';
         await request.put(`/users/${editingUser.id}`, payload);
         message.success(t('common.success'));
       } else {
@@ -1338,18 +1321,17 @@ const Users: React.FC = () => {
                       </div>
                     )
                   }] : []),
-                  // ── 安全限制 Tab（仅编辑普通用户）：用户级 IP 白名单 + 用户×模型 RPM ──
+                  // ── 安全限制 Tab（仅编辑普通用户）：用户级 IP 白名单 ──
                   ...((editingUser && !isAdminPage) ? [{
                     key: '7',
                     label: '安全限制',
                     children: (
                       <div style={{ marginTop: 8 }}>
                         <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 16, fontSize: 13 }}>
-                          用户维度的调用限制，与令牌级限制同时生效（任一方拒绝即拦截）。全部留空表示不限。
+                          用户维度的调用限制，与令牌级限制同时生效（任一方拒绝即拦截）。留空表示不限。
                         </Typography.Text>
                         <Row gutter={24}>
-                          {/* 左侧：IP 白名单 */}
-                          <Col xs={24} md={10}>
+                          <Col xs={24} md={14}>
                             <div style={{ padding: 16, background: _isLight ? '#f9fafb' : 'rgba(255,255,255,0.04)', borderRadius: 8, minHeight: 300 }}>
                               <Text strong style={{ display: 'block', marginBottom: 12 }}>IP 白名单</Text>
                               <Form.Item
@@ -1358,75 +1340,6 @@ const Users: React.FC = () => {
                               >
                                 <Input.TextArea rows={8} placeholder={'203.0.113.7\n198.51.100.0/24'} />
                               </Form.Item>
-                            </div>
-                          </Col>
-                          {/* 右侧：用户×模型 RPM */}
-                          <Col xs={24} md={14}>
-                            <div style={{ padding: 16, background: _isLight ? '#f9fafb' : 'rgba(255,255,255,0.04)', borderRadius: 8, minHeight: 300 }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                                <Text strong>模型 RPM ({rpmModels.length})</Text>
-                              </div>
-                              <Select
-                                mode="tags"
-                                allowClear
-                                showSearch
-                                optionFilterProp="label"
-                                tokenSeparators={[',', '\n']}
-                                value={rpmModels}
-                                onChange={(vals: string[]) => {
-                                  const list = (vals || []).map(v => String(v).trim()).filter(Boolean);
-                                  setRpmModels(list);
-                                  setRpmMap(prev => {
-                                    const next: Record<string, number> = {};
-                                    list.forEach(k => { next[k] = prev[k] ?? 0; });
-                                    return next;
-                                  });
-                                }}
-                                placeholder="选择或输入模型 ID（可填 * 作为兜底）"
-                                style={{ width: '100%', marginBottom: 12 }}
-                                options={availableModels
-                                  .filter((m: any) => m.model_id)
-                                  .map((m: any) => ({
-                                    value: m.model_id,
-                                    label: m.name && m.name !== m.model_id ? `${m.name} (${m.model_id})` : m.model_id,
-                                  }))}
-                              />
-                              {rpmModels.length === 0 ? (
-                                <Text type="secondary" style={{ fontSize: 13 }}>选择模型后填写每分钟请求上限，0 = 不限</Text>
-                              ) : (
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 380, overflowY: 'auto' }}>
-                                  {rpmModels.map(modelId => (
-                                    <div key={modelId} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: _isLight ? '#fff' : 'rgba(255,255,255,0.06)', borderRadius: 6, border: _isLight ? '1px solid #e5e4e7' : '1px solid rgba(255,255,255,0.1)' }}>
-                                      <div style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 }}>
-                                        {modelId}
-                                      </div>
-                                      <InputNumber
-                                        size="small"
-                                        min={0}
-                                        max={1000000}
-                                        precision={0}
-                                        value={rpmMap[modelId]}
-                                        onChange={(val) => setRpmMap(prev => ({ ...prev, [modelId]: val ?? 0 }))}
-                                        style={{ width: 120 }}
-                                        addonAfter="次/分"
-                                      />
-                                      <Button
-                                        type="text"
-                                        size="small"
-                                        icon={<CloseOutlined style={{ fontSize: 10 }} />}
-                                        style={{ width: 20, height: 20, minWidth: 20, color: 'var(--text-secondary)' }}
-                                        onClick={() => {
-                                          setRpmModels(prev => prev.filter(k => k !== modelId));
-                                          setRpmMap(prev => { const n = { ...prev }; delete n[modelId]; return n; });
-                                        }}
-                                      />
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                              <Typography.Text type="secondary" style={{ display: 'block', marginTop: 12, fontSize: 11 }}>
-                                与令牌级 RPM 各自独立计数，任一方超限即返回 429；键 * 对未单独配置的模型生效。
-                              </Typography.Text>
                             </div>
                           </Col>
                         </Row>

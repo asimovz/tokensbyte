@@ -368,16 +368,6 @@ pub async fn update_user(
             Some(trimmed.to_string())
         };
     }
-    // 用户×模型 RPM（JSON；空字符串/{}=不限）。写入前校验形状，避免热路径每次解析失败
-    if let Some(ref rpm) = request.model_rpm_limits {
-        let trimmed = rpm.trim();
-        if trimmed.is_empty() || trimmed == "{}" {
-            user.model_rpm_limits = None;
-        } else {
-            crate::relay::user_limits::parse_model_rpm_json(trimmed).map_err(AppError::BadRequest)?;
-            user.model_rpm_limits = Some(trimmed.to_string());
-        }
-    }
     if let Some(timezone) = request.timezone {
         user.timezone = Some(timezone);
     }
@@ -435,7 +425,7 @@ pub async fn update_user(
     sqlx::query(
         &state.db.format_query(r#"UPDATE users SET username = ?, email = ?, password_hash = ?, 
            nickname = ?, mobile = ?, wechat_id = ?,
-           role = ?, admin_group_id = ?, balance = ?, gift_balance = ?, gift_used_quota = ?, user_group = ?, is_active = ?, admin_remark = ?, referred_by = ?, referral_history = ?, model_discounts = ?, allowed_ips = ?, model_rpm_limits = ?, timezone = ?, credit_limit = ?, pay_enabled = ?, updated_at = CURRENT_TIMESTAMP
+           role = ?, admin_group_id = ?, balance = ?, gift_balance = ?, gift_used_quota = ?, user_group = ?, is_active = ?, admin_remark = ?, referred_by = ?, referral_history = ?, model_discounts = ?, allowed_ips = ?, timezone = ?, credit_limit = ?, pay_enabled = ?, updated_at = CURRENT_TIMESTAMP
            WHERE id = ?"#)
     )
     .bind(&user.username)
@@ -456,7 +446,6 @@ pub async fn update_user(
     .bind(&user.referral_history)
     .bind(&user.model_discounts)
     .bind(&user.allowed_ips)
-    .bind(&user.model_rpm_limits)
     .bind(&user.timezone)
     .bind(user.credit_limit)
     .bind(user.pay_enabled)
@@ -554,7 +543,7 @@ pub async fn update_user(
 
     tx.commit().await?;
 
-    // 用户级 IP 白名单 / 模型 RPM 改动立即生效，不等缓存 TTL 过期
+    // 用户级 IP 白名单改动立即生效，不等缓存 TTL 过期
     state.user_limits.invalidate(&id);
 
     if balance_changed {

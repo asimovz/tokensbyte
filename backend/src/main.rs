@@ -57,7 +57,7 @@ pub struct AppState {
     pub quota_memory: relay::quota_memory::MemoryQuotaGuard,
     /// 异步计费事件投递（Worker 批量刷库；停机时 drain）
     pub billing_ingress: relay::billing_pipeline::BillingIngress,
-    /// 用户级限制缓存（IP 白名单 / 用户×模型 RPM）
+    /// 用户级限制缓存（IP 白名单）
     pub user_limits: relay::user_limits::UserLimitsCache,
 }
 

@@ -40,8 +40,6 @@ export interface User {
   model_discounts?: string;
   /** 用户级 IP 白名单：逗号分隔的单 IP 或 CIDR 网段，空=不限 */
   allowed_ips?: string;
-  /** 用户×模型 RPM(JSON: {"模型名": rpm, "*": rpm})，0 或不填=不限 */
-  model_rpm_limits?: string;
   timezone?: string;
   /** 信控额度 */
   credit_limit?: number;
