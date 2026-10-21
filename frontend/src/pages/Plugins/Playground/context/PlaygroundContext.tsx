@@ -1307,7 +1307,7 @@ export const PlaygroundProvider: React.FC<{ children: React.ReactNode; projectId
         setLoading(true);
         const [configRes, tokensRes, configsRes] = await Promise.all([
           request.get('/plugins/playground/playground-public-config') as Promise<any>,
-          request.get('/tokens').catch(() => ({ data: [] })) as Promise<any>,
+          request.get('/tokens?full=1').catch(() => ({ data: [] })) as Promise<any>,
           request.get('/playground/model-configs').catch(() => ({ configs: [] })) as Promise<any>
         ]);
 

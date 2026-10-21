@@ -1321,6 +1321,31 @@ const Users: React.FC = () => {
                       </div>
                     )
                   }] : []),
+                  // ── 安全限制 Tab（仅编辑普通用户）：用户级 IP 白名单 ──
+                  ...((editingUser && !isAdminPage) ? [{
+                    key: '7',
+                    label: '安全限制',
+                    children: (
+                      <div style={{ marginTop: 8 }}>
+                        <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 16, fontSize: 13 }}>
+                          用户维度的调用限制，与令牌级限制同时生效（任一方拒绝即拦截）。留空表示不限。
+                        </Typography.Text>
+                        <Row gutter={24}>
+                          <Col xs={24} md={14}>
+                            <div style={{ padding: 16, background: _isLight ? '#f9fafb' : 'rgba(255,255,255,0.04)', borderRadius: 8, minHeight: 300 }}>
+                              <Text strong style={{ display: 'block', marginBottom: 12 }}>IP 白名单</Text>
+                              <Form.Item
+                                name="allowed_ips"
+                                extra="支持单 IP 与 CIDR 网段，逗号或换行分隔，例如 203.0.113.7, 198.51.100.0/24；留空=不限"
+                              >
+                                <Input.TextArea rows={8} placeholder={'203.0.113.7\n198.51.100.0/24'} />
+                              </Form.Item>
+                            </div>
+                          </Col>
+                        </Row>
+                      </div>
+                    )
+                  }] : []),
                   // ── 用户实名 Tab（仅编辑普通用户） ──
                   ...((editingUser && !isAdminPage) ? [{
                     key: '6',

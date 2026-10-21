@@ -80,7 +80,7 @@ const TokenModal: React.FC = React.memo(() => {
       const res = await (request as any).post('/tokens', data, { skipErrorHandler: true });
       toast.success('创建并关联成功');
       
-      const tokensRes = await (request.get('/tokens') as Promise<any>);
+      const tokensRes = await (request.get('/tokens?full=1') as Promise<any>);
       if (tokensRes?.data && Array.isArray(tokensRes.data)) {
         setApiTokens(tokensRes.data);
         
@@ -110,7 +110,7 @@ const TokenModal: React.FC = React.memo(() => {
       await request.delete(`/tokens/${id}`);
       toast.success('删除密钥成功');
       
-      const tokensRes = await (request.get('/tokens') as Promise<any>);
+      const tokensRes = await (request.get('/tokens?full=1') as Promise<any>);
       if (tokensRes?.data && Array.isArray(tokensRes.data)) {
         setApiTokens(tokensRes.data);
         

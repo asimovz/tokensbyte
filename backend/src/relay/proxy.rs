@@ -321,6 +321,7 @@ pub async fn check_model_permission(
         .await;
         return Err(AppError::Forbidden(msg));
     }
+
     Ok(())
 }
 

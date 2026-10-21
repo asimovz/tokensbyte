@@ -2290,6 +2290,43 @@ fn to_canonical_ip(ip: std::net::IpAddr) -> std::net::IpAddr {
     }
 }
 
+/// IP 白名单匹配：空白名单 = 不限。条目以逗号或空白（含换行）分隔，支持单 IP 与 CIDR 网段。
+/// 与黑名单相反，无法解析的条目不授予放行资格，配置写错只会拒绝、不会绕过。
+pub(crate) fn ip_matches_whitelist(client_ip: &str, whitelist: &str) -> bool {
+    let whitelist = whitelist.trim();
+    if whitelist.is_empty() {
+        return true;
+    }
+    let Ok(parsed) = client_ip.trim().parse::<std::net::IpAddr>() else {
+        return false;
+    };
+    let client = to_canonical_ip(parsed);
+
+    for item in whitelist.split(|c: char| c == ',' || c.is_whitespace()) {
+        let item = item.trim();
+        if item.is_empty() {
+            continue;
+        }
+        if let Some((ip_part, mask_part)) = item.split_once('/') {
+            let Ok(net_ip) = ip_part.trim().parse::<std::net::IpAddr>() else {
+                continue;
+            };
+            let Ok(prefix_len) = mask_part.trim().parse::<u8>() else {
+                continue;
+            };
+            if ip_in_cidr(client, to_canonical_ip(net_ip), prefix_len) {
+                return true;
+            }
+        } else if let Ok(single) = item.parse::<std::net::IpAddr>() {
+            if client == to_canonical_ip(single) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// 检查 IP 是否在站点 IP 黑名单中（支持单 IP 及 CIDR 网段）
 pub(crate) fn check_ip_blacklist(site_settings: &SiteSettings, client_ip: &str) -> AppResult<()> {
     if !site_settings.ip_blacklist_enabled || site_settings.ip_blacklist.is_empty() {

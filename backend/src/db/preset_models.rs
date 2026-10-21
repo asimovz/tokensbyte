@@ -207,7 +207,7 @@ pub async fn seed_system_preset_models(pool: &PgPool) -> anyhow::Result<u32> {
                     feature_attributes, created_at, updated_at
                )
                SELECT $1, $2, $3, $4, $5, $6, $7, '{"default":1.0}', $8, $9,
-                      $10, 1.0, 1, 1.0, 0, 1, 0, 1, $11,
+                      $10, 1.0, 0, 1.0, 0, 1, 1, 1, $11,
                       '系统预设模型，已绑定官方计费与转发规则',
                       $12, $13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                WHERE NOT EXISTS (SELECT 1 FROM models WHERE mid = $1)"#,

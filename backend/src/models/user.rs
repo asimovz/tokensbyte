@@ -59,6 +59,9 @@ pub struct User {
     /// 用户模型单独折扣(JSON: {"mid": discount})，优先于等级折扣
     #[sqlx(default)]
     pub model_discounts: Option<String>,
+    /// 用户级 IP 白名单：逗号或空白分隔的单 IP 与 CIDR 网段，空=不限。与令牌级白名单都要通过
+    #[sqlx(default)]
+    pub allowed_ips: Option<String>,
     #[sqlx(default)]
     pub timezone: Option<String>,
     /// 信控额度：管理员设置的信用额度
@@ -125,6 +128,8 @@ pub struct UpdateUserRequest {
     pub gift_used_quota: Option<f64>,
     /// 用户模型单独折扣(JSON: {"mid": discount})
     pub model_discounts: Option<String>,
+    /// 用户级 IP 白名单（逗号分隔 IP/CIDR）
+    pub allowed_ips: Option<String>,
     pub timezone: Option<String>,
     /// 信控额度
     pub credit_limit: Option<f64>,

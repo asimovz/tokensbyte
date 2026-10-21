@@ -359,6 +359,15 @@ pub async fn update_user(
             Some(md.clone())
         };
     }
+    // 用户级 IP 白名单（逗号分隔 IP/CIDR；空字符串=不限）
+    if let Some(ref ips) = request.allowed_ips {
+        let trimmed = ips.trim();
+        user.allowed_ips = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        };
+    }
     if let Some(timezone) = request.timezone {
         user.timezone = Some(timezone);
     }
@@ -416,7 +425,7 @@ pub async fn update_user(
     sqlx::query(
         &state.db.format_query(r#"UPDATE users SET username = ?, email = ?, password_hash = ?, 
            nickname = ?, mobile = ?, wechat_id = ?,
-           role = ?, admin_group_id = ?, balance = ?, gift_balance = ?, gift_used_quota = ?, user_group = ?, is_active = ?, admin_remark = ?, referred_by = ?, referral_history = ?, model_discounts = ?, timezone = ?, credit_limit = ?, pay_enabled = ?, updated_at = CURRENT_TIMESTAMP
+           role = ?, admin_group_id = ?, balance = ?, gift_balance = ?, gift_used_quota = ?, user_group = ?, is_active = ?, admin_remark = ?, referred_by = ?, referral_history = ?, model_discounts = ?, allowed_ips = ?, timezone = ?, credit_limit = ?, pay_enabled = ?, updated_at = CURRENT_TIMESTAMP
            WHERE id = ?"#)
     )
     .bind(&user.username)
@@ -436,6 +445,7 @@ pub async fn update_user(
     .bind(&user.referred_by)
     .bind(&user.referral_history)
     .bind(&user.model_discounts)
+    .bind(&user.allowed_ips)
     .bind(&user.timezone)
     .bind(user.credit_limit)
     .bind(user.pay_enabled)
@@ -532,6 +542,9 @@ pub async fn update_user(
         || (user.gift_balance - old_gift_balance).abs() > 1e-9;
 
     tx.commit().await?;
+
+    // 用户级 IP 白名单改动立即生效，不等缓存 TTL 过期
+    state.user_limits.invalidate(&id);
 
     if balance_changed {
         crate::services::notification::spawn_low_balance_check(Arc::clone(&state), id.clone());

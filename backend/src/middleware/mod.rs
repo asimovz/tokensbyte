@@ -390,48 +390,56 @@ pub async fn api_key_middleware(
         }
     }
 
-    // Check IP Whitelist
-    if !token.allowed_ips.is_empty() {
-        let client_ip: &str = request
-            .headers()
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.split(',').next())
-            .or_else(|| {
-                request
-                    .headers()
-                    .get("x-real-ip")
-                    .and_then(|v| v.to_str().ok())
-            })
-            .unwrap_or("127.0.0.1");
+    // Check IP Whitelist：令牌级与用户级都要通过，两级均支持单 IP 及 CIDR 网段
+    let client_ip: String = request
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .or_else(|| {
+            request
+                .headers()
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+        })
+        .unwrap_or("127.0.0.1")
+        .trim()
+        .to_string();
 
-        let allowed: Vec<&str> = token.allowed_ips.split(',').collect();
-        let mut is_allowed = false;
-        for ip in allowed {
-            if client_ip == ip.trim() {
-                is_allowed = true;
-                break;
-            }
+    let user_limits = state
+        .user_limits
+        .get(&state.db, &token.user_id)
+        .await
+        .allowed_ips;
+
+    let denied_reason = if !token.allowed_ips.is_empty()
+        && !crate::api::auth::ip_matches_whitelist(&client_ip, &token.allowed_ips)
+    {
+        Some(format!("IP {} not whitelisted", client_ip))
+    } else if !user_limits.trim().is_empty()
+        && !crate::api::auth::ip_matches_whitelist(&client_ip, &user_limits)
+    {
+        Some(format!("IP {} not whitelisted (用户级)", client_ip))
+    } else {
+        None
+    };
+    if let Some(msg) = denied_reason {
+        if !skip_log {
+            crate::relay::proxy::record_error_log(
+                &state,
+                &token.user_id,
+                None,
+                Some(token.id),
+                "unknown",
+                403,
+                &path,
+                &msg,
+                None,
+                None,
+            )
+            .await;
         }
-        if !is_allowed {
-            let msg = format!("IP {} not whitelisted", client_ip);
-            if !skip_log {
-                crate::relay::proxy::record_error_log(
-                    &state,
-                    &token.user_id,
-                    None,
-                    Some(token.id),
-                    "unknown",
-                    403,
-                    &path,
-                    &msg,
-                    None,
-                    None,
-                )
-                .await;
-            }
-            return AppError::Forbidden(msg).into_response();
-        }
+        return AppError::Forbidden(msg).into_response();
     }
 
     // Check Rate Limits

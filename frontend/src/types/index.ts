@@ -38,6 +38,8 @@ export interface User {
   gift_used_quota?: number;
   /** 用户模型单独折扣(JSON: {"mid": discount})，优先于等级折扣 */
   model_discounts?: string;
+  /** 用户级 IP 白名单：逗号分隔的单 IP 或 CIDR 网段，空=不限 */
+  allowed_ips?: string;
   timezone?: string;
   /** 信控额度 */
   credit_limit?: number;

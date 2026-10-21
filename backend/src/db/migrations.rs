@@ -328,7 +328,7 @@ macro_rules! pg_migration_blocks {
             feature_attributes TEXT DEFAULT '[]',
             upstream_type TEXT NOT NULL DEFAULT 'other',
             config TEXT,
-            enable_log_content INTEGER NOT NULL DEFAULT 0,
+            enable_log_content INTEGER NOT NULL DEFAULT 1,
             forward_rule_ids TEXT,
             billing_rule_id INTEGER,
             pre_deduction DOUBLE PRECISION NOT NULL DEFAULT 0.0,
@@ -378,7 +378,7 @@ macro_rules! pg_migration_blocks {
         "ALTER TABLE models ADD COLUMN IF NOT EXISTS remark TEXT",
         "ALTER TABLE models ADD COLUMN IF NOT EXISTS description TEXT",
         "ALTER TABLE models ADD COLUMN IF NOT EXISTS feature_attributes TEXT DEFAULT '[]'",
-        "ALTER TABLE models ADD COLUMN IF NOT EXISTS enable_log_content INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE models ADD COLUMN IF NOT EXISTS enable_log_content INTEGER NOT NULL DEFAULT 1",
         "ALTER TABLE logs ADD COLUMN IF NOT EXISTS is_stream INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE logs ADD COLUMN IF NOT EXISTS request_content TEXT",
         "ALTER TABLE logs ADD COLUMN IF NOT EXISTS response_content TEXT",
@@ -3444,6 +3444,41 @@ macro_rules! pg_migration_blocks {
     if let Err(e) = sqlx::query(uar_unique_index).execute(pool).await {
         tracing::warn!("⚠️ [Migration] 素材绑定唯一索引未能创建（不影响启动）: {:?}", e);
     }
+
+    // ── 新建模型默认值翻转：上下文记录默认开、折扣限价默认关 ──
+    // 只改列默认值，不动存量模型行；建模型走 models.rs 显式绑值，此处兜住手工 INSERT 与
+    // 后续新增列读取路径的默认语义。覆盖 models_site_discount_default_on_v1 设的 DEFAULT 1。
+    once_migration!(pool, "model_defaults_flip_v1",
+        "ALTER TABLE models ALTER COLUMN enable_log_content SET DEFAULT 1",
+        "ALTER TABLE models ALTER COLUMN site_discount_enabled SET DEFAULT 0",
+        "COMMENT ON COLUMN models.enable_log_content IS '是否记录请求/响应上下文（0=关，1=开，新增默认开启）'",
+        "COMMENT ON COLUMN models.site_discount_enabled IS '折扣限价开关（0=关，1=开，新增默认关闭）'"
+    );
+
+    // ── 对外文档下线「8.站点功能API」章节 ──
+    // 该章节教用户用登录 JWT 从第三方调管理接口，属于自助越权面，代码侧默认文档已整章删除；
+    // 已播种的库需按 slug 清掉目录行（子文章与 plugin_docs_intl 由外键 ON DELETE CASCADE 级联）。
+    // 同时把顺延上来的最佳实践章节标题由 9. 改为 8.，与新建库保持一致；LIKE '9.%' 保证不覆盖管理员改过的标题。
+    once_migration!(pool, "drop_site_api_docs_v1",
+        "DELETE FROM plugin_docs WHERE slug IN ('site-api', 'site-api-overview', 'site-api-user', 'site-api-tokens-logs')",
+        "UPDATE plugin_docs SET title = '8.最佳实践' WHERE slug = 'best-practices' AND title LIKE '9.%'",
+        "UPDATE plugin_docs_intl SET title = '8. Best Practices' WHERE lang = 'en' AND title LIKE '9.%' AND doc_id IN (SELECT id FROM plugin_docs WHERE slug = 'best-practices')",
+        "UPDATE plugin_docs_intl SET title = '8. ベストプラクティス' WHERE lang = 'ja' AND title LIKE '9.%' AND doc_id IN (SELECT id FROM plugin_docs WHERE slug = 'best-practices')",
+        "UPDATE plugin_docs_intl SET title = '8. 베스트 프랙티스' WHERE lang = 'ko' AND title LIKE '9.%' AND doc_id IN (SELECT id FROM plugin_docs WHERE slug = 'best-practices')",
+        "UPDATE plugin_docs_intl SET title = '8. Thực hành tốt nhất' WHERE lang = 'vi' AND title LIKE '9.%' AND doc_id IN (SELECT id FROM plugin_docs WHERE slug = 'best-practices')"
+    );
+
+    // ── 用户级安全限制：IP 白名单（含 CIDR）──
+    // 令牌级限制依旧生效，此列只做「用户维度」的补充收紧；空值视为不限，存量用户行为不变。
+    once_migration!(pool, "user_ip_whitelist_and_model_rpm_v1",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS allowed_ips TEXT",
+        "COMMENT ON COLUMN users.allowed_ips IS '用户级IP白名单，逗号分隔单IP或CIDR网段；空=不限。与令牌级白名单需同时通过'"
+    );
+
+    // 用户×模型 RPM 已取消（限流仍由令牌级 rpm_limit 承担），回收列。
+    once_migration!(pool, "drop_user_model_rpm_v1",
+        "ALTER TABLE users DROP COLUMN IF EXISTS model_rpm_limits"
+    );
 
     tracing::info!("PostgreSQL AnyPool migrations completed successfully");
     Ok(())
