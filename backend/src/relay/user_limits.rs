@@ -61,10 +61,6 @@ impl UserLimitsCache {
     pub fn invalidate(&self, user_id: &str) {
         self.entries.remove(user_id);
     }
-
-    pub fn clear(&self) {
-        self.entries.clear();
-    }
 }
 
 async fn load_user_limits(db: &Database, user_id: &str) -> UserLimits {
