@@ -1339,10 +1339,11 @@ fn compute_cost_raw(
                 return (cost, detail);
             }
 
-            // 兜底防线：若有多模态图片输入，但在非多模态分类规则下结算，
-            // 则文本与图片在常规规则下统一合并按输入费率 p_rate 收费，将图片 token 累加回 prompt_tokens
-            let prompt_tokens = if usage.image_tokens > 0 {
-                prompt_tokens + usage.image_tokens
+            // 上游 prompt_tokens 通常已包含图片 token，无条件累加会造成双重计费；
+            // 仅当 prompt 小于 image_tokens（极少数非标上游未计入图片）时才用 image_tokens 兜底
+            let raw_prompt_tokens = prompt_tokens;
+            let prompt_tokens = if usage.image_tokens > prompt_tokens {
+                usage.image_tokens
             } else {
                 prompt_tokens
             };
@@ -1379,8 +1380,18 @@ fn compute_cost_raw(
                 || (rule.claude_cache_read_rate > 0.0 && cached_tokens > 0);
 
             // 上游显式 total_tokens 且 total==prompt+completion → OpenAI 子集语义（回填 total 不算）
-            let is_openai_format =
-                usage.has_total_tokens && usage.total == prompt_tokens + completion_tokens;
+            // 同时接受未加图片兜底前的原值匹配，避免守卫抬高 prompt_tokens 后误判成 Anthropic 语义
+            let is_openai_format = usage.has_total_tokens
+                && (usage.total == prompt_tokens + completion_tokens
+                    || usage.total == raw_prompt_tokens + completion_tokens);
+            if !is_openai_format && cached_tokens > 0 && is_cached_rate_set {
+                tracing::warn!(
+                    prompt_tokens,
+                    raw_prompt_tokens,
+                    cached_tokens,
+                    "计费协议判据失配：缓存可能重复计费"
+                );
+            }
             let cc = features.cache_creation.unwrap_or(0);
 
             let (cost, detail_str) = if is_claude {
@@ -1594,4 +1605,84 @@ fn normalize_pixel_size(size: &str) -> String {
         }
     }
     String::new()
+}
+
+#[cfg(test)]
+mod billing_hotfix_tests {
+    use crate::models::BillingRule;
+    use crate::relay::usage_extractor::{ExtractedFeatures, UsageTokens};
+    use serde_json::json;
+
+    fn rule(prompt_rate: f64, completion_rate: f64, cached_rate: f64) -> BillingRule {
+        serde_json::from_value(json!({
+            "id": 91, "name": "hotfix_rule", "billing_type": "tokens",
+            "prompt_rate": prompt_rate, "completion_rate": completion_rate, "cached_rate": cached_rate,
+            "claude_cache_creation_rate": 0.0, "claude_cache_read_rate": 0.0,
+            "fixed_rate": 0.0, "duration_rate": 0.0, "billing_rule": "standard",
+            "pricing_tiers": "[]", "extended_config": "{}",
+            "is_active": 1, "is_system": 0, "pid": "p_hotfix", "pricing_type": "tokens",
+            "sort_order": 0, "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+            "applied_multiplier": 1.0,
+        }))
+        .expect("构造 BillingRule 失败")
+    }
+
+    /// 线上真实错计行 id=721603：prompt 已含 18395 图片 token，旧代码会再加一次
+    #[test]
+    fn image_tokens_are_not_added_again() {
+        let u = UsageTokens {
+            prompt: 680772, completion: 769, cached: 678912,
+            image_tokens: 18395, total: 681541, has_total_tokens: true,
+            ..Default::default()
+        };
+        let (cost, detail) = super::compute_cost_raw(
+            None, Some(&rule(12.0, 36.0, 1.5)), &u, 0.66, &ExtractedFeatures::default());
+        assert!(detail.contains("1860入*12"), "detail = {}", detail);
+        assert!(!detail.contains("699167"), "仍发生图片重复相加：{}", detail);
+        let expect = (1860.0 * 12.0 + 769.0 * 36.0 + 678912.0 * 1.5) / 1_000_000.0 * 0.66;
+        assert!((cost - expect).abs() < 1e-5, "cost={} expect={}", cost, expect);
+    }
+
+    /// Anthropic 语义不得受影响（线上真实行 id=777397）
+    #[test]
+    fn anthropic_claude_billing_unchanged() {
+        let mut r = rule(27.12, 135.6, 0.0);
+        r.claude_cache_read_rate = 1.36;
+        r.claude_cache_creation_rate = 33.9;
+        let u = UsageTokens {
+            prompt: 2, completion: 616, cached: 58342, cache_creation: 352,
+            ..Default::default()
+        };
+        let f = ExtractedFeatures { cache_creation: Some(352), ..Default::default() };
+        let (cost, detail) = super::compute_cost_raw(None, Some(&r), &u, 1.0, &f);
+        assert!(detail.contains("58342读取"), "detail = {}", detail);
+        let expect = (2.0 * 27.12 + 616.0 * 135.6 + 352.0 * 33.9 + 58342.0 * 1.36) / 1_000_000.0;
+        assert!((cost - expect).abs() < 1e-5, "cost={} expect={}", cost, expect);
+    }
+
+    /// 非标上游：prompt 未含图片，守卫补差后仍须判为 OpenAI 子集
+    #[test]
+    fn nonstandard_upstream_keeps_openai_format() {
+        let u = UsageTokens {
+            prompt: 100, completion: 10, image_tokens: 5000,
+            total: 110, has_total_tokens: true, ..Default::default()
+        };
+        let (cost, detail) = super::compute_cost_raw(
+            None, Some(&rule(12.0, 36.0, 0.0)), &u, 1.0, &ExtractedFeatures::default());
+        assert!(detail.contains("5000入*12"), "detail = {}", detail);
+        let expect = (5000.0 * 12.0 + 10.0 * 36.0) / 1_000_000.0;
+        assert!((cost - expect).abs() < 1e-6, "cost={} expect={}", cost, expect);
+    }
+
+    /// 无图无缓存普通行不得受影响
+    #[test]
+    fn plain_row_unaffected() {
+        let u = UsageTokens {
+            prompt: 1057, completion: 22, total: 1079, has_total_tokens: true,
+            ..Default::default()
+        };
+        let (_, detail) = super::compute_cost_raw(
+            None, Some(&rule(27.12, 135.6, 0.0)), &u, 1.0, &ExtractedFeatures::default());
+        assert!(detail.contains("1057入*27.12"), "detail = {}", detail);
+    }
 }
