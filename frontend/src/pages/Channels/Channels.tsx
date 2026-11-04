@@ -3316,9 +3316,15 @@ const Channels: React.FC = () => {
                                               const pct = sum > 0 ? Math.round((w / sum) * 100) : 0;
                                               const meltedSec = meltedSeconds[String(p.id)];
                                               const isDisabled = (p.status ?? 1) !== 1;
-                                              const color = meltedSec !== undefined ? 'error' : (isDisabled ? 'warning' : (tierIdx === 0 ? 'processing' : 'default'));
+                                              const tone = meltedSec !== undefined ? 'error' : (isDisabled ? 'warning' : (tierIdx === 0 ? 'primary' : 'muted'));
+                                              const toneMap = {
+                                                primary: { background: isLight ? 'rgba(22,119,255,0.10)' : 'rgba(22,119,255,0.22)', color: isLight ? '#1677ff' : '#69b1ff', border: isLight ? '1px solid rgba(22,119,255,0.35)' : '1px solid rgba(105,177,255,0.40)' },
+                                                muted: { background: isLight ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.08)', color: 'var(--text)', border: isLight ? '1px solid #e5e4e7' : '1px solid rgba(255,255,255,0.12)' },
+                                                error: { background: isLight ? 'rgba(255,77,79,0.08)' : 'rgba(255,77,79,0.18)', color: isLight ? '#cf1322' : '#ff7875', border: isLight ? '1px solid rgba(255,77,79,0.30)' : '1px solid rgba(255,120,117,0.40)' },
+                                                warning: { background: isLight ? 'rgba(250,140,22,0.08)' : 'rgba(250,140,22,0.18)', color: isLight ? '#d46b08' : '#ffa940', border: isLight ? '1px solid rgba(250,140,22,0.30)' : '1px solid rgba(255,169,64,0.40)' },
+                                              };
                                               return (
-                                                <Tag key={p.id} color={color} style={{ margin: 0, fontSize: 11, borderRadius: 4 }}>
+                                                <Tag key={p.id} style={{ margin: 0, fontSize: 11, borderRadius: 4, lineHeight: '18px', ...(toneMap as any)[tone] }}>
                                                   {p.name}
                                                   {tierIdx === 0 ? ` ${pct}%` : ''}
                                                   {meltedSec !== undefined ? ' 熔断中' : (isDisabled ? ' 已禁用' : '')}

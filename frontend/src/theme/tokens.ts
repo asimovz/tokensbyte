@@ -114,6 +114,14 @@ export function getAntdComponentTokens(mode: ThemeMode) {
     Card: {
       colorBorderSecondary: isLight ? SHADCN.zinc200 : '#303030',
     },
+    // 浅色主题 colorInfo 是近黑，Ant 派生的 infoBg=调色板[1] 会成深灰底+深字；这里钉回中性浅底
+    Alert: isLight
+      ? {
+          colorInfoBg: SHADCN.zinc100,
+          colorInfoBorder: SHADCN.zinc200,
+          colorInfo: SHADCN.zinc900,
+        }
+      : {},
   };
 }
 
