@@ -294,13 +294,19 @@ pub async fn select_channel(
         }
 
         // 子渠：最高 priority 档；同档按 weight 比例随机（绑定序仅作 weight≤0 时的兜底顺序）
-        let highest_sub_priority = sub_configs.iter().map(|c| c.priority).max().unwrap_or(0);
+        // 组内策略键 channels.config.sub_channel_policy 存在则覆盖上游全局 P/W，解析失败逐条回落
+        let sub_policy = crate::relay::ha::parse_sub_channel_policy(&picked.config);
+        let highest_sub_priority = sub_configs
+            .iter()
+            .map(|c| sub_policy.priority_of(c.id, c.priority))
+            .max()
+            .unwrap_or(0);
         let top_subs: Vec<&_> = sub_channel_ids
             .iter()
             .filter_map(|&id| {
                 sub_configs
                     .iter()
-                    .find(|c| c.id == id && c.priority == highest_sub_priority)
+                    .find(|c| c.id == id && sub_policy.priority_of(c.id, c.priority) == highest_sub_priority)
             })
             .collect();
         if top_subs.is_empty() {
@@ -313,7 +319,7 @@ pub async fn select_channel(
             }
             continue;
         }
-        let selected_sub = *pick_weighted_by(&top_subs, |c| c.weight);
+        let selected_sub = *pick_weighted_by(&top_subs, |c| sub_policy.weight_of(c.id, c.weight));
 
         let mut resolved = picked;
         apply_ha_sub_mapped(&mut resolved, selected_sub);

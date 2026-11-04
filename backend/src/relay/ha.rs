@@ -20,6 +20,7 @@ use crate::error::AppError;
 use crate::models::{ApiToken, Channel};
 use crate::AppState;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -1112,5 +1113,79 @@ fn trigger_ha_meltdown(
     let n = CLEANUP_COUNTER.fetch_add(1, Ordering::Relaxed);
     if n % 32 == 0 || state.failed_channels.len() > 2048 {
         scrub_failed_channels(state);
+    }
+}
+
+/// 组内绑定级策略的一条：任一字段可缺省，缺省字段各自独立回落上游全局值。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SubBindingPolicy {
+    pub priority: Option<i32>,
+    pub weight: Option<i32>,
+}
+
+/// `channels.config.sub_channel_policy` 的解析结果；key 为 `channel_configs.id` 的十进制字符串。
+/// 无键 / 畸形一律退化为空表，调用方按上游全局值回落，请求绝不因此失败。
+#[derive(Debug, Clone, Default)]
+pub struct SubChannelPolicy {
+    bindings: HashMap<String, SubBindingPolicy>,
+}
+
+impl SubChannelPolicy {
+    /// 组内优先级；policy 缺键或缺字段或类型畸形时回落 `fallback`（上游全局 priority）。
+    pub fn priority_of(&self, config_id: i64, fallback: i32) -> i32 {
+        self.binding(config_id)
+            .and_then(|b| b.priority)
+            .unwrap_or(fallback)
+    }
+
+    /// 组内权重；回落规则同 [`SubChannelPolicy::priority_of`]。
+    pub fn weight_of(&self, config_id: i64, fallback: i32) -> i32 {
+        self.binding(config_id).and_then(|b| b.weight).unwrap_or(fallback)
+    }
+
+    fn binding(&self, config_id: i64) -> Option<SubBindingPolicy> {
+        self.bindings.get(&config_id.to_string()).copied()
+    }
+}
+
+/// 解析 HA 组 `config` 里的 `sub_channel_policy`。逐条目容错：单条畸形只丢该条，不影响同组其它绑定。
+pub fn parse_sub_channel_policy(channel_config: &str) -> SubChannelPolicy {
+    let parsed = match serde_json::from_str::<serde_json::Value>(channel_config) {
+        Ok(v) => v,
+        Err(_) => return SubChannelPolicy::default(),
+    };
+    let policy = match parsed.get("sub_channel_policy").and_then(|v| v.as_object()) {
+        Some(p) => p,
+        None => return SubChannelPolicy::default(),
+    };
+    let mut bindings = HashMap::with_capacity(policy.len());
+    for (key, entry) in policy {
+        let item = match entry.as_object() {
+            Some(o) => o,
+            None => continue,
+        };
+        bindings.insert(
+            key.clone(),
+            SubBindingPolicy {
+                priority: read_policy_i32(item, "priority"),
+                weight: read_policy_i32(item, "weight"),
+            },
+        );
+    }
+    SubChannelPolicy { bindings }
+}
+
+/// 整数容错读取：非整数或超出 i32 范围 -> None，该字段独立回落上游全局值。
+fn read_policy_i32(
+    item: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> Option<i32> {
+    let n = match item.get(field) {
+        Some(v) => v,
+        None => return None,
+    };
+    match n.as_i64() {
+        Some(value) => i32::try_from(value).ok(),
+        None => None,
     }
 }
