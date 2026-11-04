@@ -1075,6 +1075,27 @@ pub async fn record_and_bill_inner(p: BillRecord<'_>) {
         db_model,
         time_multiplier: bill_time_multiplier,
     } = p;
+
+    // ── 零输出不计费守卫（需求二，2026-11-03，已获授权改动本函数体）──
+    // 上游返回合法 200、有输入 token，但响应里没有任何实际输出内容时不计费：
+    // 金额置 0 后由下方既有 settlement_delta 分支全额退回预扣（apply_balance < 0），
+    // 令牌/用户/渠道/配置额度与用量累加因 settled_cost == 0 自动跳过，本函数不改任何已有行。
+    // 判据要求「能证明无输出」：无响应体或解析不出已知结构时一律视为有输出，不误伤图片/音频/异步任务。
+    let zero_output = status_code == 200
+        && prompt_tokens > 0
+        && completion_tokens == 0
+        && !crate::relay::usage_extractor::resp_has_output_content(response_content.as_deref());
+    let cost = if zero_output { 0.0 } else { cost };
+    let billing_detail = if zero_output {
+        let tag = "零输出不计费（上游返回空输出，预扣已退回）";
+        Some(match billing_detail {
+            Some(d) if d.trim().is_empty() => tag.to_string(),
+            Some(d) => format!("{} | {}", d, tag),
+            None => tag.to_string(),
+        })
+    } else {
+        billing_detail
+    };
     let pre_deducted = crate::money::round_money(pre_deducted);
     let pre_deduct_gift = crate::money::round_money(pre_deduct_gift);
     // 实时 TPM 观测（与计费路径同点，零写库）

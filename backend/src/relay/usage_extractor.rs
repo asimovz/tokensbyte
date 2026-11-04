@@ -986,6 +986,187 @@ pub fn parse_usage(response: &str) -> UsageTokens {
     u
 }
 
+/// 响应体里是否存在实际输出内容（零输出不计费守卫专用，需求二 2026-11-03，v2 修正）。
+/// 返回 false = 能确定本次响应没有任何输出（空 delta 流 / 流内 error 事件 / 输出容器为空）。
+/// 返回 true  = 确有输出，或响应体判定不了（无响应体、非已知结构、一行 JSON 都解析不出）；
+/// 判定不了走 true 是保守计费分支，避免把图片/音频/自定义上游的未知字段误判成零输出。
+pub fn resp_has_output_content(response: Option<&str>) -> bool {
+    let Some(text) = response else { return true };
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
+        return rhoc_decide(&v);
+    }
+    // SSE 文本：逐行取 JSON 事件，任一事件带输出即算有输出
+    let mut saw_event = false;
+    for line in trimmed.lines() {
+        let Some(payload) = sse_json_payload(line) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(payload) else { continue };
+        saw_event = true;
+        if rhoc_decide(&v) {
+            return true;
+        }
+    }
+    !saw_event
+}
+
+/// Some(true)=确有输出，Some(false)=确定无输出，None=判定不了（由调用方走保守计费分支）
+fn rhoc_decide(v: &Value) -> bool {
+    rhoc_obj_has_output(v).unwrap_or(true)
+}
+
+fn rhoc_str_nonempty(v: &Value, key: &str) -> bool {
+    v.get(key)
+        .and_then(|s| s.as_str())
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn rhoc_arr_nonempty(v: &Value, key: &str) -> bool {
+    v.get(key)
+        .and_then(|a| a.as_array())
+        .map(|a| !a.is_empty())
+        .unwrap_or(false)
+}
+
+/// 上游在整包或流内事件里明确报错：200 状态码下的 stream_error、upstream_bad_request 等
+fn rhoc_is_error(v: &Value) -> bool {
+    v.get("error").map(|e| !e.is_null()).unwrap_or(false)
+}
+
+fn rhoc_output_keys(v: &Value) -> bool {
+    ["choices", "output", "content", "candidates"]
+        .iter()
+        .any(|k| v.get(*k).is_some())
+}
+
+fn rhoc_obj_has_output(v: &Value) -> Option<bool> {
+    if !v.is_object() {
+        return v.as_str().map(|s| !s.trim().is_empty());
+    }
+    // OpenAI Chat Completions（非流式 message / 流式 delta 同形）
+    if let Some(choices) = v.get("choices").and_then(|c| c.as_array()) {
+        for c in choices {
+            for holder in ["message", "delta"] {
+                if let Some(m) = c.get(holder) {
+                    if rhoc_str_nonempty(m, "content")
+                        || rhoc_str_nonempty(m, "reasoning_content")
+                        || rhoc_arr_nonempty(m, "tool_calls")
+                    {
+                        return Some(true);
+                    }
+                }
+            }
+            if rhoc_str_nonempty(c, "text") {
+                return Some(true);
+            }
+        }
+        return Some(false);
+    }
+    // Responses API
+    if let Some(out) = v.get("output") {
+        if rhoc_str_nonempty(v, "output_text") {
+            return Some(true);
+        }
+        if let Some(arr) = out.as_array() {
+            for item in arr {
+                if rhoc_str_nonempty(item, "text")
+                    || rhoc_arr_nonempty(item, "tool_calls")
+                    || item.get("function_call").is_some()
+                    || item.get("functionCall").is_some()
+                {
+                    return Some(true);
+                }
+                if let Some(contents) = item.get("content").and_then(|c| c.as_array()) {
+                    if contents.iter().any(|c| rhoc_str_nonempty(c, "text")) {
+                        return Some(true);
+                    }
+                }
+            }
+            return Some(false);
+        }
+    }
+    // Anthropic Messages：content 可为字符串或块数组
+    if let Some(content) = v.get("content") {
+        if let Some(s) = content.as_str() {
+            return Some(!s.trim().is_empty());
+        }
+        if let Some(blocks) = content.as_array() {
+            for b in blocks {
+                if rhoc_str_nonempty(b, "text")
+                    || rhoc_str_nonempty(b, "thinking")
+                    || rhoc_str_nonempty(b, "data")
+                    || b.get("type").and_then(|t| t.as_str()) == Some("tool_use")
+                {
+                    return Some(true);
+                }
+            }
+            return Some(false);
+        }
+        return Some(false);
+    }
+    // Gemini / Vertex：candidates[].content.parts[]
+    if let Some(cands) = v.get("candidates").and_then(|c| c.as_array()) {
+        for cand in cands {
+            let parts = cand
+                .get("content")
+                .and_then(|c| c.get("parts"))
+                .and_then(|p| p.as_array());
+            if let Some(parts) = parts {
+                for part in parts {
+                    if rhoc_str_nonempty(part, "text")
+                        || part.get("inlineData").is_some()
+                        || part.get("inline_data").is_some()
+                        || part.get("functionCall").is_some()
+                        || part.get("function_call").is_some()
+                    {
+                        return Some(true);
+                    }
+                }
+            }
+        }
+        return Some(false);
+    }
+    // 图片输出：data[] / images[] / results[] / artifacts[]
+    for key in ["data", "images", "results", "artifacts"] {
+        if let Some(arr) = v.get(key).and_then(|a| a.as_array()) {
+            for d in arr {
+                if d.is_object() {
+                    if ["url", "b64_json", "image_url", "image"]
+                        .iter()
+                        .any(|f| rhoc_str_nonempty(d, f))
+                    {
+                        return Some(true);
+                    }
+                } else if d.as_str().map(|s| !s.trim().is_empty()).unwrap_or(false) {
+                    return Some(true);
+                }
+            }
+            return Some(false);
+        }
+    }
+    // 顶层 text / output_text
+    for key in ["text", "output_text"] {
+        if let Some(s) = v.get(key).and_then(|s| s.as_str()) {
+            return Some(!s.trim().is_empty());
+        }
+    }
+    // 包裹形态 { code, data: { choices|output|content|candidates } }
+    if let Some(d) = v.get("data") {
+        if d.is_object() && rhoc_output_keys(d) {
+            return rhoc_obj_has_output(d);
+        }
+    }
+    // 流内/整包 error 事件：确定无输出
+    if rhoc_is_error(v) {
+        return Some(false);
+    }
+    // 判定不了
+    None
+}
+
 pub fn extract_usage_json_string(response: &str) -> Option<String> {
     if let Ok(v) = serde_json::from_str::<Value>(response) {
         // 仅提取 usage 节点，不返回完整响应体（避免存入 choices 等大量聊天内容）
