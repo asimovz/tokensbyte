@@ -1659,7 +1659,7 @@ const QuotaProgressItem: React.FC<{
           width={36} 
           strokeWidth={8}
           strokeColor={isUnlimited ? '#3b82f6' : strokeColor} // 蓝/绿/黄/红
-          trailColor={isLight ? '#e4e4e7' : '#27272a'}
+          railColor={isLight ? '#e4e4e7' : '#27272a'}
           showInfo={false}
         />
       </div>

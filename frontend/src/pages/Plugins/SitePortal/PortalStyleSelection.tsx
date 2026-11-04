@@ -379,7 +379,7 @@ const PortalStyleSelection: React.FC = () => {
       <Alert
         type="info"
         showIcon
-        message="生效范围"
+        title="生效范围"
         description={
           <span style={{ fontSize: 13 }}>
             风格始终影响 <Text code>/home/contact</Text>、<Text code>/home/about</Text>、<Text code>/portal/models</Text> 等 Tera 页。

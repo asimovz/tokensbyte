@@ -167,7 +167,7 @@ const WalletBalanceDisplay: React.FC<WalletBalanceDisplayProps> = ({
           showInfo={false} 
           size="small" 
           strokeColor={percent < 10 ? '#ff4d4f' : percent < 40 ? '#faad14' : '#52c41a'} 
-          trailColor={isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.08)'} 
+          railColor={isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.08)'} 
           style={{ margin: 0, lineHeight: 1 }} 
         />
       </div>
@@ -192,7 +192,7 @@ const WalletBalanceDisplay: React.FC<WalletBalanceDisplayProps> = ({
           showInfo={false} 
           size="small" 
           strokeColor={gift > 0 ? (isLight ? '#18181b' : '#fafafa') : '#ff4d4f'} 
-          trailColor={isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.08)'} 
+          railColor={isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.08)'} 
           style={{ margin: 0, lineHeight: 1 }} 
         />
       </div>

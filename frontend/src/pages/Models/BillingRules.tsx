@@ -1925,7 +1925,7 @@ const BillingRules: React.FC = () => {
                                 <Alert
                                   type="info"
                                   showIcon
-                                  message={
+                                  title={
                                     <span>
                                       <strong>配置建议：</strong>
                                       建议配置两个阶梯。
@@ -2210,7 +2210,7 @@ const BillingRules: React.FC = () => {
                                 <Alert
                                   type="info"
                                   showIcon
-                                  message={
+                                  title={
                                     <span>
                                       <strong>配置建议：</strong>
                                       分辨率阶梯示例 2k=0.80 元/秒、768p=0.50 元/秒；输入图额外单价 0.20 元/张；免费张数默认 5。

@@ -1416,7 +1416,7 @@ const Channels: React.FC = () => {
                   size={ringSize}
                   strokeWidth={ringStroke}
                   strokeColor={stroke}
-                  trailColor={isLight ? '#e4e4e7' : 'rgba(255,255,255,0.12)'}
+                  railColor={isLight ? '#e4e4e7' : 'rgba(255,255,255,0.12)'}
                   format={() => (
                     <span
                       style={{
@@ -3036,7 +3036,7 @@ const Channels: React.FC = () => {
                             type="info"
                             showIcon
                             style={{ fontSize: 12, padding: '6px 12px' }}
-                            message="使用站点「系统设置 → 存储设置」中配置的 TOS 信息。请确保已正确配置。"
+                            title="使用站点「系统设置 → 存储设置」中配置的 TOS 信息。请确保已正确配置。"
                           />
                         </div>
                       )}
@@ -3222,7 +3222,7 @@ const Channels: React.FC = () => {
 
                                 <div style={{ marginBottom: 8 }}>
                                   <Alert
-                                    message="高可用上游多选绑定"
+                                    title="高可用上游多选绑定"
                                     description={`您可以选择最多 ${haMaxRetries} 个上游配置绑定到该虚拟组（禁用渠道也可选，绑定后运行时不可用）。优先级 / 权重按「组内」生效：可在下方每个已绑上游上单独设置，未设置的跟随该上游的全局值。系统优先使用组内「优先级」最高的一档；同档有多个时按各自「权重」比例随机分流。选满 ${haMaxRetries} 个后，其余配置将被置灰。`}
                                     type="info"
                                     showIcon
@@ -3895,7 +3895,7 @@ const Channels: React.FC = () => {
                                 <div style={{ maxHeight: 'calc(100vh - 340px)', minHeight: 300, overflowY: 'auto', paddingRight: 12 }}>
                                   {isHaMode && haSubChannels.length > 0 && (
                                     <Alert
-                                      message="高可用子渠道独立映射"
+                                      title="高可用子渠道独立映射"
                                       description="可为每个子渠道设置独立的模型别名；开启高级设置可按分辨率（视频 480p/…、图片 1k/…）映射不同上游模型名。优先级：子渠该分辨率 → 默认别名该分辨率 → 明文别名（未填档位即回退）。"
                                       type="info"
                                       showIcon

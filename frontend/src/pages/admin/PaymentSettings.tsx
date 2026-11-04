@@ -399,7 +399,7 @@ const PaymentSettings: React.FC = () => {
       return (
         <>
           <Alert type="info" showIcon icon={<SafetyCertificateOutlined />} style={{ marginBottom: 16, borderRadius: 8 }}
-            message="微信支付 API v3 接入指引"
+            title="微信支付 API v3 接入指引"
             description={<div style={{ fontSize: 13, lineHeight: 1.8 }}>
               <div>1. 登录 <a href="https://pay.weixin.qq.com" target="_blank" rel="noreferrer">微信支付商户平台</a> 获取商户号 / API v3 密钥 / 证书</div>
               <div>2. 开通 Native 支付，并绑定公众号/小程序 AppID</div>
@@ -429,7 +429,7 @@ const PaymentSettings: React.FC = () => {
       return (
         <>
           <Alert type="info" showIcon style={{ marginBottom: 16, borderRadius: 8 }}
-            message="支付宝电脑网站支付接入指引"
+            title="支付宝电脑网站支付接入指引"
             description={<div style={{ fontSize: 13, lineHeight: 1.8 }}>
               <div>1. 登录 <a href="https://open.alipay.com" target="_blank" rel="noreferrer">支付宝开放平台</a> 创建应用并获取 App ID</div>
               <div>2. 配置 RSA2 密钥，签约电脑网站支付</div>
@@ -453,7 +453,7 @@ const PaymentSettings: React.FC = () => {
       return (
         <>
           <Alert type="info" showIcon style={{ marginBottom: 16, borderRadius: 8 }}
-            message="Stripe Checkout 接入指引"
+            title="Stripe Checkout 接入指引"
             description={<div style={{ fontSize: 13, lineHeight: 1.8 }}>
               <div>1. 在 Stripe Dashboard 获取 Secret Key / Publishable Key</div>
               <div>2. Webhooks 监听 checkout.session.completed，填入下方回调地址</div>
@@ -477,7 +477,7 @@ const PaymentSettings: React.FC = () => {
       return (
         <>
           <Alert type="info" showIcon style={{ marginBottom: 16, borderRadius: 8 }}
-            message="BonusPay 接入指引"
+            title="BonusPay 接入指引"
             description={<div style={{ fontSize: 13, lineHeight: 1.8 }}>
               <div>在 bonuspay.network 获取 Partner-Id，并配置 RSA 密钥与回调地址</div>
             </div>}
@@ -506,7 +506,7 @@ const PaymentSettings: React.FC = () => {
       return (
         <>
           <Alert type="info" showIcon style={{ marginBottom: 16, borderRadius: 8 }}
-            message="HyperBC 接入指引"
+            title="HyperBC 接入指引"
             description={<div style={{ fontSize: 13, lineHeight: 1.8 }}>在 HyperBC 商户后台获取 APP_ID 与密钥，并配置回调地址</div>}
           />
           {notifyUrlBlock(notifyUrl('hyperbc'), 'HyperBC 异步回调通知地址')}
@@ -533,7 +533,7 @@ const PaymentSettings: React.FC = () => {
       return (
         <>
           <Alert type="info" showIcon style={{ marginBottom: 16, borderRadius: 8 }}
-            message="通联收银宝接入指引"
+            title="通联收银宝接入指引"
             description={<div style={{ fontSize: 13, lineHeight: 1.8 }}>
               <div>通联支付为单一通道，可在上方分别开启微信 / 支付宝子渠道；用户端默认看到「通联支付」。</div>
             </div>}
@@ -879,7 +879,7 @@ const PaymentSettings: React.FC = () => {
             type="info"
             showIcon
             style={{ marginBottom: 16, borderRadius: 8 }}
-            message="支付渠道列表"
+            title="支付渠道列表"
             description="排序数字越大越靠前。中文与英文副标题默认直接展示，点击后方编辑按钮可进行修改，留空则使用系统默认。点击「配置」可修改网关参数、Logo及子渠道。用户端中文站点显示中文配置，其他语言显示英文配置。"
           />
           <Table

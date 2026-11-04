@@ -421,7 +421,7 @@ const PortalManager: React.FC = () => {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
         <Title level={5} style={{ margin: 0, color: _isLight ? '#1f2937' : '#fff' }}>静态 HTML 生成</Title>
       </div>
-      <Alert type="info" showIcon message="生成后的静态 HTML 文件将部署到 /portal 路径，便于搜索引擎抓取和 SEO/GEO 优化" style={{ marginBottom: 16 }} />
+      <Alert type="info" showIcon title="生成后的静态 HTML 文件将部署到 /portal 路径，便于搜索引擎抓取和 SEO/GEO 优化" style={{ marginBottom: 16 }} />
 
       <div style={cardStyle}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -452,14 +452,14 @@ const PortalManager: React.FC = () => {
         <Alert 
           type="success" 
           showIcon 
-          message="当前为「自动更新」：保存门户/风格配置后会后台自动生成 /portal 静态页，无需手动点击。" 
+          title="当前为「自动更新」：保存门户/风格配置后会后台自动生成 /portal 静态页，无需手动点击。" 
           style={{ marginBottom: 16 }} 
         />
       ) : (
         <Alert 
           type="warning" 
           showIcon 
-          message="当前为「手动生成」：保存配置后不会自动更新，请点击下方按钮生成静态页。" 
+          title="当前为「手动生成」：保存配置后不会自动更新，请点击下方按钮生成静态页。" 
           style={{ marginBottom: 16 }} 
         />
       )}
@@ -468,7 +468,7 @@ const PortalManager: React.FC = () => {
         type="info"
         showIcon
         style={{ marginBottom: 16 }}
-        message="路径说明"
+        title="路径说明"
         description={
           <span>
             互动模型广场走 React 路由 <Text code>/home/models</Text>；下方「SEO 模型页」生成的是 <Text code>/portal/models</Text> 静态页（供爬虫/外链），两者独立。
@@ -651,7 +651,7 @@ const PortalManager: React.FC = () => {
       {customHomepage.enabled && (
         <>
           <Alert
-            message="自定义主页已启用"
+            title="自定义主页已启用"
             description="首页将直接显示粘贴的 HTML。导航/底部/风格选择不会注入到该 HTML；配置仍会保留，关闭开关即可恢复托管或风格化首页。"
             type="warning"
             showIcon

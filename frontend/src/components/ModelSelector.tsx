@@ -247,7 +247,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   if (loading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 200 }}>
-        <Spin tip="加载模型数据..."><div style={{ padding: 40 }} /></Spin>
+        <Spin description="加载模型数据..."><div style={{ padding: 40 }} /></Spin>
       </div>
     );
   }

@@ -1469,7 +1469,7 @@ const PluginConfigInner: React.FC = () => {
                   type="success"
                   showIcon
                   icon={<CheckCircleOutlined />}
-                  message="对象存储已配置"
+                  title="对象存储已配置"
                   description={`当前 Bucket: ${storageConfig.tos_bucket}，Endpoint: ${storageConfig.tos_endpoint}`}
                   style={{ background: 'rgba(82,196,26,0.06)', border: '1px solid rgba(82,196,26,0.2)' }}
                 />
@@ -1477,7 +1477,7 @@ const PluginConfigInner: React.FC = () => {
                 <Alert
                   type="warning"
                   showIcon
-                  message="对象存储未配置"
+                  title="对象存储未配置"
                   description={
                     name === 'upstream_asset_relay'
                       ? storageConfig.global_configured
@@ -1601,7 +1601,7 @@ const PluginConfigInner: React.FC = () => {
                 <Alert
                   type={testResult.success ? 'success' : 'error'}
                   showIcon
-                  message={testResult.success ? '连接成功' : '连接失败'}
+                  title={testResult.success ? '连接成功' : '连接失败'}
                   description={testResult.message}
                   style={{ background: testResult.success ? 'rgba(82,196,26,0.06)' : 'rgba(255,77,79,0.06)', border: `1px solid ${testResult.success ? 'rgba(82,196,26,0.2)' : 'rgba(255,77,79,0.2)'}` }}
                 />
@@ -1670,7 +1670,7 @@ const PluginConfigInner: React.FC = () => {
             type={storageConfig?.global_configured ? "success" : "warning"}
             showIcon
             icon={storageConfig?.global_configured ? <CheckCircleOutlined /> : <InfoCircleOutlined />}
-            message={storageConfig?.global_configured ? "已使用全局存储设置" : "未配置存储"}
+            title={storageConfig?.global_configured ? "已使用全局存储设置" : "未配置存储"}
             description={
               <div>
                 <p style={{ margin: 0 }}>当前存储默认使用<b>管理后台「站点设置 → 存储设置」</b>里面的对象存储配置，无需在此处单独进行配置。</p>
@@ -1756,7 +1756,7 @@ const PluginConfigInner: React.FC = () => {
               type="success"
               showIcon
               icon={<CheckCircleOutlined />}
-              message="私域素材资产库已配置"
+              title="私域素材资产库已配置"
               description="Access Key 已配置，可正常使用虚拟人像上传与审核功能"
               style={{ background: 'rgba(82,196,26,0.06)', border: '1px solid rgba(82,196,26,0.2)' }}
             />
@@ -1764,7 +1764,7 @@ const PluginConfigInner: React.FC = () => {
             <Alert
               type="warning"
               showIcon
-              message="私域素材资产库未配置"
+              title="私域素材资产库未配置"
               description="虚拟人像功能需要配置火山引擎 API 访问密钥，请前往火山引擎控制台获取"
               style={{ background: 'rgba(250,173,20,0.06)', border: '1px solid rgba(250,173,20,0.2)' }}
             />
@@ -3873,7 +3873,7 @@ const PluginConfigInner: React.FC = () => {
               type="warning"
               showIcon
               style={{ marginBottom: 16, borderRadius: 8 }}
-              message={`有 ${mpModels.filter(m => m.is_active !== 1 && m.mp_enabled).length} 个模型已开启广场展示但在模型管理中处于禁用状态，这些模型不会在模型广场中显示。`}
+              title={`有 ${mpModels.filter(m => m.is_active !== 1 && m.mp_enabled).length} 个模型已开启广场展示但在模型管理中处于禁用状态，这些模型不会在模型广场中显示。`}
             />
           )}
           <div style={{

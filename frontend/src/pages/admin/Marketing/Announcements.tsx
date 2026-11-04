@@ -303,7 +303,7 @@ const NotificationSettingsForm: React.FC = () => {
               type="warning"
               showIcon
               style={{ marginBottom: 16 }}
-              message="尚未配置余额提醒模板 ID，请先到「消息通知 → 短信」填写后再开启并保存"
+              title="尚未配置余额提醒模板 ID，请先到「消息通知 → 短信」填写后再开启并保存"
             />
           )}
           <Form.Item
@@ -333,7 +333,7 @@ const NotificationSettingsForm: React.FC = () => {
         type="info"
         showIcon
         style={{ marginBottom: 16 }}
-        message="可用变量"
+        title="可用变量"
         description={
           <span>
             <Text code>{'{{site_name}}'}</Text> 站点/发件人名称 ·{' '}

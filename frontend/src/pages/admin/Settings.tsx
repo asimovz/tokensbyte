@@ -827,7 +827,7 @@ const Settings: React.FC = () => {
         type="info"
         showIcon
         style={{ marginBottom: 14 }}
-        message="手动轮询仅影响客户端 GET；后台自动轮询与计费不变。低余额视频限制与「余额不足」区分；保存后即时生效。"
+        title="手动轮询仅影响客户端 GET；后台自动轮询与计费不变。低余额视频限制与「余额不足」区分；保存后即时生效。"
       />
       <Form.Item
         label="手动轮询请求上游"
@@ -1204,13 +1204,13 @@ const Settings: React.FC = () => {
 
   const menuSettingsContent = loadingMenu ? (
     <div style={{ textAlign: 'center', padding: '60px 0' }}>
-      <Spin size="large" tip="正在加载菜单配置..." />
+      <Spin size="large" description="正在加载菜单配置..." />
     </div>
   ) : (
     <div style={{ width: '100%', overflowX: 'auto' }}>
       <div style={{ marginBottom: 16 }}>
         <Alert
-          message="菜单配置说明"
+          title="菜单配置说明"
           description="在此配置用户使用端（左侧菜单栏）中各个菜单的显示顺序、启用状态以及针对不同会员等级/用户组的访问可见权限。"
           type="info"
           showIcon
@@ -1348,7 +1348,7 @@ const Settings: React.FC = () => {
         type="info"
         showIcon
         style={{ marginBottom: 14 }}
-        message="日志清理只清空请求/响应大字段；行归档将超期行迁入 logs_archive。火山素材清理转换素材缓存（本地+云端每日维护）。"
+        title="日志清理只清空请求/响应大字段；行归档将超期行迁入 logs_archive。火山素材清理转换素材缓存（本地+云端每日维护）。"
       />
 
       <Row gutter={16}>
@@ -1426,7 +1426,7 @@ const Settings: React.FC = () => {
           type={testResult.success ? 'success' : 'error'}
           showIcon
           style={{ marginBottom: 14 }}
-          message={testResult.success ? '连接成功' : '连接失败'}
+          title={testResult.success ? '连接成功' : '连接失败'}
           description={testResult.message}
         />
       )}
@@ -1532,12 +1532,12 @@ const Settings: React.FC = () => {
         type="info"
         showIcon
         style={{ marginBottom: 14 }}
-        message="当前数据库连接与运行状态（只读）"
+        title="当前数据库连接与运行状态（只读）"
         description="此处展示系统当前生效的 PostgreSQL 连接与运行状态。采集只读目录与共享内存统计，打开本页或点刷新时查一次，不轮询、不扫业务大表。更改连接请修改 DATABASE_URL 或数据目录 .database_url 后重启。「初始化并清空数据库」会清空全部业务数据，随后与全新安装一样设置超级管理员。"
       />
 
       {dbInfoError && (
-        <Alert type="warning" showIcon message={dbInfoError} style={{ marginBottom: 12 }} />
+        <Alert type="warning" showIcon title={dbInfoError} style={{ marginBottom: 12 }} />
       )}
 
       <Spin spinning={dbInfoLoading && !dbInfo}>
@@ -1716,7 +1716,7 @@ const Settings: React.FC = () => {
               type="error"
               showIcon
               style={{ marginBottom: 16 }}
-              message="此操作会清空当前数据库的全部业务数据（用户、令牌、日志、渠道等），并重建空表结构。"
+              title="此操作会清空当前数据库的全部业务数据（用户、令牌、日志、渠道等），并重建空表结构。"
               description="连接配置不会改变。完成后将进入与全新安装相同的超级管理员设置页。此操作不可撤销。"
             />
             <div style={{ marginBottom: 8 }}>请输入「{DB_RESET_CONFIRM_TEXT}」以继续：</div>
@@ -1733,7 +1733,7 @@ const Settings: React.FC = () => {
             <Alert
               type="warning"
               showIcon
-              message={resetting ? '正在清空当前数据库…' : `将在 ${resetCountdown} 秒后开始清空当前数据`}
+              title={resetting ? '正在清空当前数据库…' : `将在 ${resetCountdown} 秒后开始清空当前数据`}
               description={resetting
                 ? '清空完成后将自动进入全新安装，请设置首个超级管理员。请勿关闭页面。'
                 : '倒计时期间可点击取消中止。倒计时结束后将真正执行，不可再撤销。'}

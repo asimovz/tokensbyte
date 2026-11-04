@@ -37,7 +37,7 @@ const LowBalanceSmsHint: React.FC<Props> = ({
       type="info"
       showIcon
       style={style}
-      message={title || `${vendor}余额提醒短信模板（可复制申请）`}
+      title={title || `${vendor}余额提醒短信模板（可复制申请）`}
       description={
         <div>
           <Paragraph

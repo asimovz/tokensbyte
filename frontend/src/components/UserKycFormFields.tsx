@@ -208,7 +208,7 @@ const UserKycFormFields: React.FC<Props> = ({
           type="error"
           showIcon
           style={{ marginBottom: 16 }}
-          message="实名认证未通过"
+          title="实名认证未通过"
           description={form.getFieldValue('reject_reason') || '请根据驳回原因修改后重新提交'}
         />
       )}
@@ -217,7 +217,7 @@ const UserKycFormFields: React.FC<Props> = ({
           type="info"
           showIcon
           style={{ marginBottom: 16 }}
-          message="实名材料审核中，请耐心等待。审核通过前可修改后重新提交。"
+          title="实名材料审核中，请耐心等待。审核通过前可修改后重新提交。"
         />
       )}
 

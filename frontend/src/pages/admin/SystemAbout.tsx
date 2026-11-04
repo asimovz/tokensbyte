@@ -69,7 +69,7 @@ const MetricRing: React.FC<{
           size={stacked ? 30 : 22}
           strokeWidth={10}
           strokeColor={ringStroke(pct, isLight)}
-          trailColor={isLight ? '#e2e8f0' : 'rgba(255,255,255,0.1)'}
+          railColor={isLight ? '#e2e8f0' : 'rgba(255,255,255,0.1)'}
           format={() => null}
         />
         <span className={`tabular-nums text-foreground ${stacked ? 'text-[11px] font-medium' : 'text-xs'}`}>

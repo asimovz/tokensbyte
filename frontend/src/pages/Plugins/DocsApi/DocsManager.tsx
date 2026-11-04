@@ -1051,7 +1051,7 @@ const DocsManager: React.FC<DocsManagerProps> = ({ apiPrefix = '/plugins/docs-ap
       <div style={styleSheet.main}>
         {detailLoading && !editingDoc ? (
           <div style={{ display: 'flex', flex: 1, alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-            <Spin tip="加载文档中..." />
+            <Spin description="加载文档中..." />
           </div>
         ) : editingDoc ? (
           <div key={`doc-workspace-${editingDoc.id}`} style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>

@@ -476,7 +476,7 @@ const ChannelConfigs: React.FC = () => {
                   size={ringSize}
                   strokeWidth={ringStroke}
                   strokeColor={stroke}
-                  trailColor={isLight ? '#e4e4e7' : 'rgba(255,255,255,0.12)'}
+                  railColor={isLight ? '#e4e4e7' : 'rgba(255,255,255,0.12)'}
                   format={() => (
                     <span
                       style={{

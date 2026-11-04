@@ -667,7 +667,7 @@ const Logs: React.FC<{ routerEp?: string }> = ({ routerEp }) => {
         </Descriptions>
 
         {loadingDetail ? (
-          <div style={{ padding: 32, textAlign: 'center' }}><Spin tip={t('logs.loading_detail', '加载详情中...')} /></div>
+          <div style={{ padding: 32, textAlign: 'center' }}><Spin description={t('logs.loading_detail', '加载详情中...')} /></div>
         ) : (
         <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
           <Col span={24} style={{ maxWidth: '100%', overflow: 'hidden' }}>

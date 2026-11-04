@@ -246,7 +246,7 @@ const ModerationQuery: React.FC<{ pluginNs: string }> = ({ pluginNs }) => {
           <Alert
             type={hitCount > 0 ? 'warning' : 'info'}
             showIcon
-            message={
+            title={
               hitCount > 0
                 ? t('moderation_query.status_hits', { count: hitCount })
                 : t('moderation_query.status_empty')
@@ -259,7 +259,7 @@ const ModerationQuery: React.FC<{ pluginNs: string }> = ({ pluginNs }) => {
         <Alert
           type="error"
           showIcon
-          message={t('moderation_query.query_failed')}
+          title={t('moderation_query.query_failed')}
           description={errorMsg === t('moderation_query.query_failed') ? undefined : errorMsg}
         />
       )}

@@ -164,7 +164,7 @@ const CustomMedia = ({ src, type }: { src: string; type: '图片' | '视频' }) 
 
   return (
     <div style={{ position: 'relative', minHeight: 150, minWidth: 200, display: 'flex', justifyContent: 'center', alignItems: 'center', background: 'rgba(0,0,0,0.02)', border: '1px solid rgba(0,0,0,0.05)', borderRadius: 8, padding: 8, maxWidth: '100%' }}>
-      {loading && !error && <Spin style={{ position: 'absolute' }} tip={`正在加载${type}...`} />}
+      {loading && !error && <Spin style={{ position: 'absolute' }} description={`正在加载${type}...`} />}
       {error ? (
         <div style={{ textAlign: 'center', color: '#ff4d4f', padding: 16 }}>
           <div style={{ marginBottom: 8 }}>{type}加载失败，链接可能已失效或无法直接访问：</div>
@@ -447,7 +447,7 @@ const TaskLogs: React.FC = () => {
     if (loadingDetail) {
       return (
         <div style={{ padding: 24, textAlign: 'center' }}>
-          <Spin tip={t('logs.loading_detail', '加载详情中...')} />
+          <Spin description={t('logs.loading_detail', '加载详情中...')} />
         </div>
       );
     }

@@ -201,7 +201,7 @@ const SiteIconsManager: React.FC = () => {
           {/* 进度条 */}
           {syncTotal > 0 && (
             <div style={{ padding: '6px 16px 0' }}>
-              <Progress percent={syncPercent} size="small" strokeColor={syncFinished ? '#52c41a' : '#1677ff'} trailColor="rgba(255,255,255,0.06)" />
+              <Progress percent={syncPercent} size="small" strokeColor={syncFinished ? '#52c41a' : '#1677ff'} railColor="rgba(255,255,255,0.06)" />
             </div>
           )}
           {/* 日志输出 */}
