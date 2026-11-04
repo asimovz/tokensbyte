@@ -1044,6 +1044,10 @@ const ChannelConfigs: React.FC = () => {
             </Form.Item>
           </div>
 
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>
+            优先级 / 权重请在分组内设置；此处的值仅作兜底，只有未配置组内策略的分组才会跟随。
+          </div>
+
           <div style={{ display: 'flex', gap: 12 }}>
             <Form.Item name="rate" label="渠道倍率" rules={[{ required: true }]} style={{ flex: 1, marginBottom: 10 }}>
               <InputNumber min={0} step={0.1} placeholder="1.0" style={{ width: '100%' }} />
