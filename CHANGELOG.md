@@ -1,5 +1,22 @@
 # UPDATE
 
+## 2026-11-04 — 高可用组内可单独配置上游优先级 / 权重
+
+- 优先级 / 权重从「上游渠道配置预设上的全局字段」变成**绑定级**属性：同一条上游可在 A 组当主用、在 B 组当备用，不必再按组复制上游记录
+- 存储为 `channels.config` 的平级新键 `sub_channel_policy`（`{ "<channel_config_id>": { "priority": int, "weight": int } }`）；`sub_channels` 仍是纯 id 数组 —— 无 DDL、无迁移、无新表，回滚后旧代码照常读
+- 生效值口径：`组内值 ?? 上游全局值`。整组在**实际改动任一行组内 P/W** 时才物化：先把全部已绑上游的当前生效值写满，再覆盖被改的那一行，避免组内/全局两套刻度混比
+- 选渠只把 `select_channel` 子渠档的 3 处取值换成生效值（最高档判定 + 同档过滤 + 同档加权随机）；两级调度结构与计费口径不变
+- 解析逐条目容错：单个坏值只丢该条，畸形 JSON 整组回落全局值，请求不因此失败
+- 前端：已绑上游行内「组内优先级 0–999 / 组内权重 0–100」整数输入（留空 = 跟随该上游全局值）、「生效顺序」预览（主用 / 备用 / 同档分流比例 + 熔断 / 禁用状态）、主用档权重合计为 0 与单条权重为 0 的告警、HA 语境 2 处只读标签改为「生效值（组内 / 全局来源）」
+- 上游渠道配置预设页加一行只读提示「优先级 / 权重请在分组内设置」；该页全局 P/W 表单项、初值与保存逻辑均未改动，仍是未物化组的回落来源
+- 存量未配置组行为与升级前逐字等价，属向后兼容的增量能力
+
+### 涉及文件
+- `backend/src/relay/ha.rs`（新增 `SubChannelPolicy` / `parse_sub_channel_policy`）、`backend/src/relay/router.rs`
+- `frontend/src/pages/Channels/Channels.tsx`、`frontend/src/pages/Channels/ChannelConfigs.tsx`
+
+---
+
 ## 2026-08-02 — 控制台顶栏毛玻璃（用户端/管理端）
 
 - `DashboardLayout` 顶栏改为半透明 + `backdrop-filter`；内容区铺满顶栏下方，滚动时穿过毛玻璃（用户端与管理端共用布局一并生效）
@@ -167,10 +184,11 @@
 - `chat_completions` 去掉平行的 `try_failover` / `trigger_ha_meltdown`；改为记账后 `HaAttempt::on_spawn_result_err`（与 image / responses 同构）
 - 非首次失败由 `reinstate_first_log` 还原 first_fail；删除 `chat_upstream_fail` / `record_failed_billing`
 
-## 2026-07-29 — HA 同档子渠按绑定序（不再随机）
+## 2026-07-29 — HA 同档子渠按绑定序（不再随机）【本条已过期，见下方订正】
 
 - 子渠选中：`priority` 降序 → 同档 `weight` 降序 → 再同则按 `sub_channels` 绑定序；去掉加权随机，错误终态稳定
 - 物理渠之间的优先级/权重选渠逻辑不变；failover / first_fail 语义不变
+- **订正（2026-11-04 核对代码）**：2026-08-10 `3dbe5cb` 已把同档改回**加权随机**（抽出 `pick_weighted_by`），当前生效的是按 `weight` 比例随机分流，不是确定性绑定序。确定性版本的动机「错误终态稳定」随之失去：全组失败时「第一次失败的上游」每次可能不同，日志对不齐。照本条原文实现会做错。
 
 ## 2026-07-29 — 本地默认 info；HA 关键日志升为 info
 
