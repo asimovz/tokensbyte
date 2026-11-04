@@ -2797,8 +2797,8 @@ const Channels: React.FC = () => {
                                   </span>
                                 </div>
                                 {levels.length > 0 ? (
-                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                    {levels.slice(0, 8).map((idStr: string) => {
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 300, overflowY: 'auto', paddingRight: 4 }}>
+                                    {levels.map((idStr: string) => {
                                       const lv = availableUserLevels.find((l: any) => l.id.toString() === idStr || l.group_key === idStr);
                                       return (
                                       <div key={idStr} style={{ padding: '6px 8px', background: isLight ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.05)', borderRadius: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -2821,7 +2821,6 @@ const Channels: React.FC = () => {
                                       </div>
                                       );
                                     })}
-                                    {levels.length > 8 && <div style={{ fontSize: 11, color: 'var(--text-secondary)', textAlign: 'center', marginTop: 2 }}>...还有 {levels.length - 8} 个</div>}
                                   </div>
                                 ) : (
                                   <Text type="secondary" style={{ fontSize: 12 }}>{isExcludeMode ? '未排除任何等级 (全部允许)' : '当前全部用户等级允许'}</Text>
