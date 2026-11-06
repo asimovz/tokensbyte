@@ -41,6 +41,8 @@ interface HaLog {
   status_code?: number;
 }
 
+const todayRange = (): [dayjs.Dayjs, dayjs.Dayjs] => [dayjs().startOf('day'), dayjs().endOf('day')];
+
 const HaLogs: React.FC = () => {
   const { message } = App.useApp();
   const [logs, setLogs] = useState<HaLog[]>([]);
@@ -49,7 +51,7 @@ const HaLogs: React.FC = () => {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(15);
   const [keyword, setKeyword] = useState('');
-  const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null]>([null, null]);
+  const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null]>(todayRange);
   const [sortBy, setSortBy] = useState<string | undefined>(undefined);
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
@@ -86,7 +88,7 @@ const HaLogs: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchLogs({ p: 1, kw: '', range: [null, null], so: 'desc' });
+    fetchLogs({ p: 1, kw: '', range: todayRange(), so: 'desc' });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

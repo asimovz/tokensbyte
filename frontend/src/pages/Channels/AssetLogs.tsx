@@ -18,6 +18,8 @@ import request from '../../utils/request';
 const { Text, Title } = Typography;
 const { RangePicker } = DatePicker;
 
+const todayStr = () => dayjs().format('YYYY-MM-DD');
+
 interface AssetLogRow {
   id: number;
   user_id: string;
@@ -61,7 +63,7 @@ const AssetLogs: React.FC = () => {
   const [level, setLevel] = useState('');
   const [action, setAction] = useState('');
   const [source, setSource] = useState('all');
-  const [dateRange, setDateRange] = useState<[string, string] | null>(null);
+  const [dateRange, setDateRange] = useState<[string, string] | null>([todayStr(), todayStr()]);
   const [levels, setLevels] = useState<{ id: number; name: string }[]>([]);
   const [bindings, setBindings] = useState<{ id: number; name: string }[]>([]);
   const [bindingId, setBindingId] = useState<number | undefined>(undefined);
@@ -83,7 +85,7 @@ const AssetLogs: React.FC = () => {
     }).catch(() => {});
   }, []);
 
-  const fetchData = useCallback(async (p?: number, ps?: number) => {
+  const fetchData = useCallback(async (p?: number, ps?: number, range?: [string, string] | null) => {
     setLoading(true);
     try {
       const params: Record<string, any> = {
@@ -96,9 +98,10 @@ const AssetLogs: React.FC = () => {
       if (source && source !== 'all') params.source = source;
       else if (source === 'all') params.source = 'all';
       if (bindingId) params.binding_id = bindingId;
-      if (dateRange) {
-        params.date_from = dateRange[0];
-        params.date_to = dateRange[1];
+      const r = range !== undefined ? range : dateRange;
+      if (r) {
+        params.date_from = r[0];
+        params.date_to = r[1];
       }
       const res: any = await request.get('/asset-logs', { params });
       setData(res?.list || []);
@@ -123,9 +126,10 @@ const AssetLogs: React.FC = () => {
     setAction('');
     setSource('all');
     setBindingId(undefined);
-    setDateRange(null);
+    const today: [string, string] = [todayStr(), todayStr()];
+    setDateRange(today);
     setPage(1);
-    setTimeout(() => fetchData(1, pageSize, ), 0);
+    setTimeout(() => fetchData(1, pageSize, today), 0);
   };
 
   const openDetail = async (id: number) => {
@@ -275,6 +279,7 @@ const AssetLogs: React.FC = () => {
           options={SOURCE_OPTIONS}
         />
         <RangePicker
+          value={dateRange ? ([dayjs(dateRange[0]), dayjs(dateRange[1])] as [dayjs.Dayjs, dayjs.Dayjs]) : null}
           onChange={(_, dateStrings) => {
             if (dateStrings[0] && dateStrings[1]) {
               setDateRange([dateStrings[0], dateStrings[1]]);
