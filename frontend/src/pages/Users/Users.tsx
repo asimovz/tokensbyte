@@ -11,12 +11,13 @@ import MobileCardList, { MobileCard, CardRow, CardActions } from '../../componen
 import ModelSelector from '../../components/ModelSelector';
 import WalletBalanceDisplay from '../../components/WalletBalanceDisplay';
 import WalletDetailsView from '../../components/WalletDetailsView';
+import UserModelsDrawer from '../../components/UserModelsDrawer';
 import UserKycFormFields, {
   kycToFormValues,
   formValuesToKycPayload,
   KYC_STATUS_META,
 } from '../../components/UserKycFormFields';
-import { PlusOutlined, EditOutlined, DeleteOutlined, UserOutlined, SyncOutlined, WalletOutlined, LoginOutlined, ArrowLeftOutlined, CloseOutlined, SearchOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined, UserOutlined, SyncOutlined, WalletOutlined, LoginOutlined, ArrowLeftOutlined, CloseOutlined, SearchOutlined, AppstoreOutlined } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { useLocation } from 'react-router-dom';
 import request from '../../utils/request';
@@ -211,6 +212,9 @@ const Users: React.FC = () => {
   const [rechargeForm] = Form.useForm();
   const rechargeActionType = Form.useWatch('actionType', rechargeForm);
   const rechargeWalletType = Form.useWatch('walletType', rechargeForm) || 'system';
+
+  // ── 可访问模型抽屉状态 ──
+  const [modelsDrawerUser, setModelsDrawerUser] = useState<User | null>(null);
 
   // ── 钱包明细弹窗状态 ──
   const [walletDetailUser, setWalletDetailUser] = useState<User | null>(null);
@@ -699,6 +703,12 @@ const Users: React.FC = () => {
               title="登录此用户"
             />
           )}
+          <Button
+            icon={<AppstoreOutlined />}
+            style={{ color: '#722ed1', borderColor: '#722ed1' }}
+            onClick={() => setModelsDrawerUser(record)}
+            title="可访问模型"
+          />
           <Button icon={<EditOutlined />} onClick={() => handleEdit(record)} />
           {canDeleteRow(record) && (
             <Popconfirm title={t('common.confirm_delete')} onConfirm={() => handleDelete(record.id)}>
@@ -908,6 +918,7 @@ const Users: React.FC = () => {
                   {!isAdminPage && (
                     <Button size="small" icon={<LoginOutlined />} style={{ color: '#1677ff', borderColor: '#1677ff' }} onClick={() => handleImpersonate(record)} title="登录此用户" />
                   )}
+                  <Button size="small" icon={<AppstoreOutlined />} style={{ color: '#722ed1', borderColor: '#722ed1' }} onClick={() => setModelsDrawerUser(record)} title="可访问模型" />
                   <Button size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)} />
                   {canDeleteRow(record) && (
                     <Popconfirm title={t('common.confirm_delete')} onConfirm={() => handleDelete(record.id)}>
@@ -1568,6 +1579,14 @@ const Users: React.FC = () => {
           />
         )}
       </Modal>
+
+      {/* ── 可访问模型抽屉 ── */}
+      <UserModelsDrawer
+        open={!!modelsDrawerUser}
+        userId={modelsDrawerUser?.id ?? null}
+        userName={modelsDrawerUser?.username}
+        onClose={() => setModelsDrawerUser(null)}
+      />
     </Card>
   );
 };
