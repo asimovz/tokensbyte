@@ -41,6 +41,7 @@ pub mod user;
 pub mod user_kyc;
 pub mod user_levels;
 pub mod users;
+pub mod user_models;
 
 pub fn build_router(state: Arc<AppState>) -> Router {
     // 1. Management APIs (Admin/User UI)
@@ -57,6 +58,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/users/{id}/recharge", post(users::recharge_user))
         .route("/users/{id}/impersonate", post(users::impersonate_user))
         .route("/users/{id}/level-logs", get(users::get_user_level_logs))
+        .route("/users/{id}/models", get(user_models::list_user_models))
         .route(
             "/users/{id}/kyc",
             get(user_kyc::admin_get_user_kyc).put(user_kyc::admin_upsert_user_kyc),
