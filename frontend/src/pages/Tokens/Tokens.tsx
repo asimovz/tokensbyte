@@ -42,6 +42,7 @@ const Tokens: React.FC = () => {
   const [detailRefreshing, setDetailRefreshing] = useState(false);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [editingToken, setEditingToken] = useState<ApiToken | null>(null);
+  const [togglingId, setTogglingId] = useState<number | null>(null);
   const [form] = Form.useForm();
   const [passwordForm] = Form.useForm();
   const screens = useBreakpoint();
@@ -265,6 +266,19 @@ const Tokens: React.FC = () => {
     setIsModalVisible(true);
   };
 
+  const handleToggleActive = async (record: ApiToken, checked: boolean) => {
+    setTogglingId(record.id);
+    try {
+      await request.put(`/tokens/${record.id}`, { is_active: checked ? 1 : 0 });
+      message.success(t('common.success'));
+      fetchTokens();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setTogglingId(null);
+    }
+  };
+
   const handleDelete = async (id: number) => {
     try {
       await request.delete(`/tokens/${id}`);
@@ -439,9 +453,17 @@ const Tokens: React.FC = () => {
               <Tag color={scopeColor} style={{ margin: 0, fontSize: '11px', padding: '0 4px', lineHeight: '16px' }}>
                 {scopeLabel}
               </Tag>
-              <Tag color={isActive ? 'success' : 'default'} style={{ margin: 0, fontSize: '11px', padding: '0 4px', lineHeight: '16px' }}>
-                {isActive ? t('common.active', '启用') : t('common.disabled', '禁用')}
-              </Tag>
+              <Space size={4} style={{ margin: 0 }}>
+                <AppSwitch
+                  size="small"
+                  checked={isActive}
+                  loading={togglingId === record.id}
+                  onChange={(checked) => handleToggleActive(record, checked)}
+                />
+                <Text type="secondary" style={{ fontSize: '11px', lineHeight: '16px' }}>
+                  {isActive ? t('common.active', '启用') : t('common.disabled', '禁用')}
+                </Text>
+              </Space>
             </Space>
           </Space>
         );
@@ -773,7 +795,15 @@ const Tokens: React.FC = () => {
                         {record.kid ? <Tag color="default" style={{ fontFamily: 'monospace', fontSize: 11, margin: 0 }}>{record.kid}</Tag> : <Text type="secondary">-</Text>}
                       </CardRow>
                       <CardRow label={t('tokens.key_status')} compact={true}>
-                        <Tag color="default" style={{ margin: 0 }}>{record.is_active ? t('common.active') : t('common.disabled')}</Tag>
+                        <Space size={6}>
+                          <AppSwitch
+                            size="small"
+                            checked={record.is_active === 1 || record.is_active === true}
+                            loading={togglingId === record.id}
+                            onChange={(checked) => handleToggleActive(record, checked)}
+                          />
+                          <Text type="secondary" style={{ fontSize: 12 }}>{record.is_active ? t('common.active') : t('common.disabled')}</Text>
+                        </Space>
                       </CardRow>
                       <CardRow label={t('tokens.available_quota')} compact={true}>
                         <Space direction="vertical" size={0}>
