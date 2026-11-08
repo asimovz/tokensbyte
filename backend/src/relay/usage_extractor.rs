@@ -45,6 +45,8 @@ pub struct ExtractedFeatures {
     pub web_search: Option<i32>,
     /// 峰谷时段倍率快照（请求开始/冻结时锁定；异步结算优先使用，避免跨时段变价）
     pub time_multiplier: Option<f64>,
+    /// 输入/参考视频总时长（秒），取自上游 usage，仅 video_seconds_io 消费
+    pub video_ref_seconds: Option<f64>,
 }
 
 /// content[].type 是否包含指定关键字
@@ -242,6 +244,7 @@ pub fn extract_request_features(body: &Value) -> ExtractedFeatures {
     let mut has_video = false;
     let mut has_audio = false;
     let mut duration_seconds = None;
+    let mut video_ref_seconds = None;
 
     // service_tier：根 / parameters；腾讯云 OffPeak=Enabled → flex
     let service_tier = body
@@ -428,6 +431,15 @@ pub fn extract_request_features(body: &Value) -> ExtractedFeatures {
         {
             input_images = Some(ii as i32);
         }
+        if let Some(in_sec) = usage
+            .get("input_video_duration")
+            .or_else(|| usage.get("input_seconds"))
+            .or_else(|| usage.get("InputSeconds"))
+            .and_then(parse_json_f64)
+            .filter(|&d| d > 0.0)
+        {
+            video_ref_seconds = Some(in_sec);
+        }
     }
     if input_images.is_none() {
         input_images = body
@@ -532,6 +544,7 @@ pub fn extract_request_features(body: &Value) -> ExtractedFeatures {
         version,
         web_search: None,
         time_multiplier: None,
+        video_ref_seconds,
     }
 }
 
@@ -552,6 +565,7 @@ impl ExtractedFeatures {
         overwrite_if_some(&mut self.image_count, other.image_count);
         // 峰谷快照：已锁定的值不被后续 merge 冲掉
         set_opt_if_none(&mut self.time_multiplier, other.time_multiplier);
+        overwrite_if_some(&mut self.video_ref_seconds, other.video_ref_seconds);
     }
 
     /// 轮询结算：叠加终态响应特征，并应用厂商覆盖（顺序与历史一致，不可打乱）

@@ -39,11 +39,13 @@ const RULES_WITH_PRICING_TIERS = new Set([
   'tiered',
   'doubao_chat',
   'image_resolution',
+  'image_resolution_io',
   'image_size_pixel',
   'video_resolution',
   'video_quality',
   'volc_seedream_pro',
   'minimax_h3',
+  'video_seconds_io',
 ]);
 
 interface RuleContainerProps {
@@ -800,7 +802,11 @@ const BillingRules: React.FC = () => {
       } else if (values.billing_rule === 'doubao_chat') {
         const fastEnabled = form.getFieldValue('doubao_fast_enabled') === true;
         extConfig = { ...extConfig, doubao_fast_enabled: fastEnabled };
-      } else if (values.billing_rule === 'minimax_h3' || values.billing_rule === 'volc_seedream_pro') {
+      } else if (
+        values.billing_rule === 'minimax_h3' ||
+        values.billing_rule === 'volc_seedream_pro' ||
+        values.billing_rule === 'video_seconds_io'
+      ) {
         const freeDefault = formDefaultFreeImageCount(values.billing_rule);
         const freeCount = Number(values.free_image_count);
         extConfig = {
@@ -1732,6 +1738,7 @@ const BillingRules: React.FC = () => {
                       <Radio value="fixed">固定费率 (单次)</Radio>
                       <Radio value="per_image">按张收费 (实际返回)</Radio>
                       <Radio value="image_resolution">按分辨率K</Radio>
+                      <Radio value="image_resolution_io">按分辨率K (输入/生成)</Radio>
                       <Radio value="image_size_pixel">按分辨率像素</Radio>
                       <Radio value="vidu_image">Vidu 图片</Radio>
                       <Radio value="volc_seedream_pro">火山 Seedream 5.0 Pro</Radio>
@@ -1789,6 +1796,65 @@ const BillingRules: React.FC = () => {
                                   <Button
                                     type="dashed"
                                     onClick={() => add({ resolution: '', rate: 0, image_ref_multiplier: 1.0, enabled: true })}
+                                    block
+                                    icon={<PlusOutlined />}
+                                    style={{ marginTop: 8, height: '40px' }}
+                                  >
+                                    增加一个分辨率价格档位
+                                  </Button>
+                                </>
+                              )}
+                            </Form.List>
+                          </RuleContainer>
+                        );
+                      }
+
+                      if (rule === 'image_resolution_io') {
+                        return (
+                          <RuleContainer
+                            isLight={_isLight}
+                            title="图片分辨率K（输入/生成）计费配置"
+                            description="匹配说明：按 resolution 参数匹配分辨率等级（如 1k、2k、4k，忽略大小写），同一档位分别设置输入参考图与生成图的单张费率。费用 = 输入张数 × 输入单价 + 生成张数 × 生成单价。未命中档位时按最高生成单价的档位计费。"
+                          >
+                            <Form.List name="pricing_tiers" initialValue={[]}>
+                              {(fields, { add, remove }) => (
+                                <>
+                                  <Row gutter={12} style={{ marginBottom: 8, opacity: 0.5, fontSize: 12 }}>
+                                    <Col span={6}>分辨率</Col>
+                                    <Col span={6}>输入单价</Col>
+                                    <Col span={6}>生成单价</Col>
+                                    <Col span={4}>状态</Col>
+                                  </Row>
+                                  {fields.map(({ key, name, ...restField }) => (
+                                    <Row key={key} gutter={12} align="middle" style={{ marginBottom: 12 }}>
+                                      <Col span={6}>
+                                        <Form.Item {...restField} name={[name, 'resolution']} rules={[{ required: true }]} noStyle>
+                                          <Input placeholder="如: 1k / 2k / 4k" style={{ width: '100%' }} />
+                                        </Form.Item>
+                                      </Col>
+                                      <Col span={6}>
+                                        <Form.Item {...restField} name={[name, 'input_rate']} rules={[{ required: true }]} noStyle>
+                                          <InputNumber placeholder="输入单张费率" style={{ width: '100%' }} precision={6} min={0} addonAfter="/张" />
+                                        </Form.Item>
+                                      </Col>
+                                      <Col span={6}>
+                                        <Form.Item {...restField} name={[name, 'rate']} rules={[{ required: true }]} noStyle>
+                                          <InputNumber placeholder="生成单张费率" style={{ width: '100%' }} precision={6} min={0} addonAfter="/张" />
+                                        </Form.Item>
+                                      </Col>
+                                      <Col span={4}>
+                                        <Form.Item {...restField} name={[name, 'enabled']} valuePropName="checked" style={{ marginBottom: 0 }}>
+                                          <Switch size="small" />
+                                        </Form.Item>
+                                      </Col>
+                                      <Col span={2} style={{ textAlign: 'right' }}>
+                                        <Button type="text" danger icon={<DeleteOutlined />} onClick={() => remove(name)} />
+                                      </Col>
+                                    </Row>
+                                  ))}
+                                  <Button
+                                    type="dashed"
+                                    onClick={() => add({ resolution: '', input_rate: 0, rate: 0, enabled: true })}
                                     block
                                     icon={<PlusOutlined />}
                                     style={{ marginTop: 8, height: '40px' }}
@@ -2083,6 +2149,7 @@ const BillingRules: React.FC = () => {
                       <Radio value="standard">按固定时长收费 (单价/秒)</Radio>
                       <Radio value="video_resolution">按视频分辨率阶梯表</Radio>
                       <Radio value="minimax_h3">视频秒价+输入图</Radio>
+                      <Radio value="video_seconds_io">视频秒价 (输入/生成)+输入图</Radio>
                       <Radio value="video_quality">按视频画质及帧率阶梯表</Radio>
                       <Radio value="kling_video">可灵视频 (倍率计费)</Radio>
                       <Radio value="vidu_video">Vidu 视频</Radio>
@@ -2275,6 +2342,104 @@ const BillingRules: React.FC = () => {
                                     <Button
                                       type="dashed"
                                       onClick={() => add({ resolution: '2k', rate: 0.8, enabled: true })}
+                                      block
+                                      icon={<PlusOutlined />}
+                                      style={{ marginTop: 8, height: '40px' }}
+                                    >
+                                      增加一个分辨率价格档位
+                                    </Button>
+                                  </>
+                                )}
+                              </Form.List>
+                            </Form.Item>
+                          </RuleContainer>
+                        );
+                      }
+
+                      if (rule === 'video_seconds_io') {
+                        return (
+                          <RuleContainer
+                            isLight={_isLight}
+                            title="视频秒价（输入/生成）+ 输入图计费配置"
+                            description={
+                              <div>
+                                <Text type="secondary" style={{ fontSize: '13px', display: 'block', marginBottom: '8px' }}>
+                                  计费说明：生成秒数 × 生成秒单价 + 输入参考秒数 × 输入秒单价 + 超出免费张数的输入图按张累加。输入参考秒数取自上游 usage 的 input_video_duration / input_seconds / InputSeconds，上游未回传时按 0 计。
+                                </Text>
+                                <Alert
+                                  type="warning"
+                                  showIcon
+                                  title={
+                                    <span>
+                                      <strong>配置前须核实：</strong>
+                                      本模式把 usage 的时长字段当作<strong>纯生成秒数</strong>。若该上游的 total_seconds 已含输入参考秒，输入侧会被重复计费——请先用一次真实带参考视频的请求核对 usage 字段含义，再启用本模式。
+                                    </span>
+                                  }
+                                  style={{ marginBottom: '12px' }}
+                                />
+                              </div>
+                            }
+                          >
+                            <Row gutter={16} style={{ marginBottom: 16 }}>
+                              <Col span={12}>
+                                <Form.Item name="prompt_rate" label="输入图额外单价" rules={[{ required: true, message: '请输入输入图额外单价' }]} style={{ marginBottom: 0 }}>
+                                  <InputNumber placeholder="超出免费张数后每张价格" style={{ width: '100%' }} precision={6} min={0} addonAfter="元/张" />
+                                </Form.Item>
+                              </Col>
+                              <Col span={12}>
+                                <Form.Item
+                                  name="free_image_count"
+                                  label="输入图免费张数"
+                                  tooltip="不超过该数量的输入参考图不计费；默认 5 张"
+                                  initialValue={5}
+                                  rules={[{ required: true, message: '请输入免费张数' }]}
+                                  style={{ marginBottom: 0 }}
+                                >
+                                  <InputNumber style={{ width: '100%' }} precision={0} min={0} step={1} addonAfter="张" />
+                                </Form.Item>
+                              </Col>
+                            </Row>
+
+                            <Form.Item label="视频分辨率秒单价（输入参考 / 输出生成）" required style={{ marginBottom: 0 }}>
+                              <Form.List name="pricing_tiers" initialValue={[]}>
+                                {(fields, { add, remove }) => (
+                                  <>
+                                    <Row gutter={12} style={{ marginBottom: 8, opacity: 0.5, fontSize: 12 }}>
+                                      <Col span={6}>分辨率</Col>
+                                      <Col span={6}>输入秒单价</Col>
+                                      <Col span={6}>生成秒单价</Col>
+                                      <Col span={4}>状态</Col>
+                                    </Row>
+                                    {fields.map(({ key, name, ...restField }) => (
+                                      <Row key={key} gutter={12} align="middle" style={{ marginBottom: 12 }}>
+                                        <Col span={6}>
+                                          <Form.Item {...restField} name={[name, 'resolution']} rules={[{ required: true }]} noStyle>
+                                            <Input placeholder="如: 2k / 768p" style={{ width: '100%' }} />
+                                          </Form.Item>
+                                        </Col>
+                                        <Col span={6}>
+                                          <Form.Item {...restField} name={[name, 'input_rate']} rules={[{ required: true }]} noStyle>
+                                            <InputNumber placeholder="输入参考秒单价" style={{ width: '100%' }} precision={6} min={0} addonAfter="/秒" />
+                                          </Form.Item>
+                                        </Col>
+                                        <Col span={6}>
+                                          <Form.Item {...restField} name={[name, 'rate']} rules={[{ required: true }]} noStyle>
+                                            <InputNumber placeholder="生成秒单价" style={{ width: '100%' }} precision={6} min={0} addonAfter="/秒" />
+                                          </Form.Item>
+                                        </Col>
+                                        <Col span={4}>
+                                          <Form.Item {...restField} name={[name, 'enabled']} valuePropName="checked" style={{ marginBottom: 0 }}>
+                                            <Switch size="small" />
+                                          </Form.Item>
+                                        </Col>
+                                        <Col span={2} style={{ textAlign: 'right' }}>
+                                          <Button type="text" danger icon={<DeleteOutlined />} onClick={() => remove(name)} />
+                                        </Col>
+                                      </Row>
+                                    ))}
+                                    <Button
+                                      type="dashed"
+                                      onClick={() => add({ resolution: '2k', input_rate: 0, rate: 0.8, enabled: true })}
                                       block
                                       icon={<PlusOutlined />}
                                       style={{ marginTop: 8, height: '40px' }}

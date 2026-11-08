@@ -26,9 +26,11 @@ const RULE_LABELS: Record<string, string> = {
   fixed: '固定按次',
   per_image: '按张收费',
   image_resolution: '按分辨率K',
+  image_resolution_io: '按分辨率K (输入/生成)',
   image_size_pixel: '按分辨率像素',
   video_resolution: '按分辨率阶梯',
   minimax_h3: '视频秒价+输入图',
+  video_seconds_io: '视频秒价 (输入/生成)+输入图',
   video_quality: '按画质帧率阶梯',
   kling_video: '可灵视频',
   vidu_video: 'Vidu 视频',
@@ -271,6 +273,19 @@ const RateDisplay: React.FC<RateDisplayProps> = ({ rule, currencySymbol, formatP
           </div>
         );
       }
+      if (rule.billing_rule === 'image_resolution_io') {
+        const activeTiers = tiers.filter(t => t.enabled !== false);
+        if (activeTiers.length === 0) return <Text type="secondary" style={s}>按分辨率K (输入/生成) (无有效配置)</Text>;
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+            {activeTiers.map((t, idx) => (
+              <Text key={idx} type="secondary" style={s}>
+                {t.resolution}: 输入 {fp(t.input_rate)} / 生成 {fp(t.rate)} 每张
+              </Text>
+            ))}
+          </div>
+        );
+      }
       if (rule.billing_rule === 'image_size_pixel') {
         const activeTiers = tiers.filter(t => t.enabled !== false);
         if (activeTiers.length === 0) return <Text type="secondary" style={s}>按分辨率像素 (无有效配置){multiplierStr}</Text>;
@@ -342,6 +357,24 @@ const RateDisplay: React.FC<RateDisplayProps> = ({ rule, currencySymbol, formatP
             : activeTiers.map((t, idx) => (
               <Text key={idx} type="secondary" style={s}>
                 {t.resolution}: {fp(t.rate)} / s
+              </Text>
+            ))}
+        </div>
+      );
+    }
+    if (rule.billing_rule === 'video_seconds_io') {
+      const activeTiers = tiers.filter(t => t.enabled !== false);
+      const freeCount = resolveFreeImageCount(ext.free_image_count, 'video_seconds_io');
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+          <Text type="secondary" style={s}>
+            {freeCount} 张以内免费，超出部分 {fp(rule.prompt_rate)}/张
+          </Text>
+          {activeTiers.length === 0
+            ? <Text type="secondary" style={s}>分辨率阶梯 (无有效配置)</Text>
+            : activeTiers.map((t, idx) => (
+              <Text key={idx} type="secondary" style={s}>
+                {t.resolution}: 输入 {fp(t.input_rate)} / 生成 {fp(t.rate)} 每秒
               </Text>
             ))}
         </div>

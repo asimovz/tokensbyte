@@ -265,6 +265,9 @@ fn compute_cost_raw(
         /// 图片：有图（图生图）倍率，仅 image_resolution 使用
         #[serde(default)]
         pub image_ref_multiplier: Option<f64>,
+        /// 输入侧单价：image_resolution_io 按张、video_seconds_io 按秒
+        #[serde(default)]
+        pub input_rate: f64,
     }
 
     /// 供视频画质（分辨率及帧率阶梯）计费使用的辅助结构体
@@ -393,6 +396,49 @@ fn compute_cost_raw(
                         }
                     }
                 }
+            } else if rule.billing_rule == "image_resolution_io" {
+                // 输入张数 × 输入单价 + 生成张数 × 生成单价，两侧单价取自同一分辨率档位
+                let output_n = features.image_count.map(|c| c.max(1) as f64).unwrap_or(1.0);
+                let input_n = features.image_ref_count.unwrap_or(0).max(0) as f64;
+                let res = features.resolution.as_deref().unwrap_or("1k");
+                let mut input_rate = 0.0;
+                let mut output_rate = rate;
+                detail_desc = format!("分辨率K输入/生成匹配(默认生成单价: {})", rate);
+                if let Ok(tiers) = serde_json::from_str::<Vec<ResolutionTier>>(&rule.pricing_tiers)
+                {
+                    let enabled: Vec<&ResolutionTier> = tiers.iter().filter(|t| t.enabled).collect();
+                    let picked = enabled
+                        .iter()
+                        .copied()
+                        .find(|t| t.resolution.eq_ignore_ascii_case(res))
+                        .or_else(|| {
+                            enabled.iter().copied().max_by(|a, b| {
+                                a.rate.partial_cmp(&b.rate).unwrap_or(std::cmp::Ordering::Equal)
+                            })
+                        });
+                    if let Some(t) = picked {
+                        input_rate = t.input_rate;
+                        output_rate = t.rate;
+                        detail_desc = if t.resolution.eq_ignore_ascii_case(res) {
+                            format!("命中分辨率阶梯 {}", t.resolution)
+                        } else {
+                            format!("分辨率{}未命中,兜底最高阶梯({})", res, t.resolution)
+                        };
+                    }
+                }
+                let cost = (input_n * input_rate + output_n * output_rate) * discount;
+                return (
+                    cost,
+                    format!(
+                        "{} -> (输入:{}张*{:.6} + 生成:{}张*{:.6})*{:.2}倍率",
+                        detail_desc,
+                        input_n as i32,
+                        input_rate,
+                        output_n as i32,
+                        output_rate,
+                        discount
+                    ),
+                );
             } else if rule.billing_rule == "image_size_pixel" {
                 // 按分辨率像素计费：匹配 size 参数（如 1024x1024），支持画质独立定价
                 count = features.image_count.map(|c| c.max(1) as f64).unwrap_or(1.0);
@@ -716,6 +762,67 @@ fn compute_cost_raw(
                         detail_desc,
                         dur,
                         rate,
+                        billable_images,
+                        input_images,
+                        free_images,
+                        image_rate,
+                        discount
+                    ),
+                );
+            } else if rule.billing_rule == "video_seconds_io" {
+                // 生成秒 × 生成秒单价 + 输入参考秒 × 输入秒单价 + 输入图超额（free_image_count，缺省 5）
+                let in_dur = features.video_ref_seconds.unwrap_or(0.0);
+                let res = features.resolution.as_deref();
+                let mut in_rate = 0.0;
+                let mut out_rate = rate;
+                detail_desc = format!("视频秒价(输入/生成)+输入图 默认单价: {}", rate);
+                if let Ok(tiers) = serde_json::from_str::<Vec<ResolutionTier>>(&rule.pricing_tiers)
+                {
+                    let enabled: Vec<&ResolutionTier> = tiers.iter().filter(|t| t.enabled).collect();
+                    let picked = res
+                        .and_then(|r| {
+                            enabled
+                                .iter()
+                                .copied()
+                                .find(|t| t.resolution.eq_ignore_ascii_case(r))
+                        })
+                        .or_else(|| {
+                            enabled.iter().copied().max_by(|a, b| {
+                                a.rate.partial_cmp(&b.rate).unwrap_or(std::cmp::Ordering::Equal)
+                            })
+                        });
+                    if let Some(t) = picked {
+                        in_rate = t.input_rate;
+                        out_rate = t.rate;
+                        let tier_desc = if res.is_some_and(|r| t.resolution.eq_ignore_ascii_case(r)) {
+                            format!("命中分辨率 {}", t.resolution)
+                        } else {
+                            match res {
+                                Some(r) => {
+                                    format!("分辨率{}未命中，兜底最高阶梯({})", r, t.resolution)
+                                }
+                                None => format!("无分辨率，兜底最高阶梯({})", t.resolution),
+                            }
+                        };
+                        detail_desc = format!("视频秒价(输入/生成)+输入图 {}", tier_desc);
+                    }
+                }
+                let free_images = free_image_count_from_ext(&rule.extended_config, 5);
+                let input_images = features.image_ref_count.unwrap_or(0).max(0);
+                let billable_images = (input_images - free_images).max(0);
+                let image_rate = rule.prompt_rate;
+                let total_cost =
+                    (dur * out_rate + in_dur * in_rate + billable_images as f64 * image_rate)
+                        * discount;
+                return (
+                    total_cost,
+                    format!(
+                        "{} -> (生成:{:.2}秒*{} + 输入:{:.2}秒*{} + 输入图超额:{}张(共{}张,免费{}张)*{}元/张)*{:.2}倍率",
+                        detail_desc,
+                        dur,
+                        out_rate,
+                        in_dur,
+                        in_rate,
                         billable_images,
                         input_images,
                         free_images,
@@ -1684,5 +1791,194 @@ mod billing_hotfix_tests {
         let (_, detail) = super::compute_cost_raw(
             None, Some(&rule(27.12, 135.6, 0.0)), &u, 1.0, &ExtractedFeatures::default());
         assert!(detail.contains("1057入*27.12"), "detail = {}", detail);
+    }
+}
+
+#[cfg(test)]
+mod billing_io_tests {
+    use crate::models::BillingRule;
+    use crate::relay::usage_extractor::{extract_request_features, ExtractedFeatures, UsageTokens};
+    use serde_json::json;
+
+    fn rule(billing_type: &str, billing_rule: &str, tiers: serde_json::Value, ext: serde_json::Value) -> BillingRule {
+        serde_json::from_value(json!({
+            "id": 92, "name": "io_rule", "billing_type": billing_type,
+            "prompt_rate": 0.2, "completion_rate": 0.0, "cached_rate": 0.0,
+            "claude_cache_creation_rate": 0.0, "claude_cache_read_rate": 0.0,
+            "fixed_rate": 0.0, "duration_rate": 0.5, "billing_rule": billing_rule,
+            "pricing_tiers": tiers.to_string(), "extended_config": ext.to_string(),
+            "is_active": 1, "is_system": 0, "pid": "p_io", "pricing_type": "custom",
+            "sort_order": 0, "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+            "applied_multiplier": 1.0,
+        }))
+        .expect("构造 BillingRule 失败")
+    }
+
+    fn cost(r: &BillingRule, f: &ExtractedFeatures, discount: f64) -> (f64, String) {
+        super::compute_cost(None, Some(r), &UsageTokens::default(), discount, f)
+    }
+
+    fn close(got: f64, want: f64) {
+        assert!((got - want).abs() < 1e-6, "cost={} want={}", got, want);
+    }
+
+    #[test]
+    fn image_io_charges_input_and_output_separately() {
+        let r = rule("requests", "image_resolution_io",
+            json!([{ "resolution": "2k", "input_rate": 0.1, "rate": 0.3, "enabled": true }]), json!({}));
+        let f = ExtractedFeatures {
+            image_count: Some(2), image_ref_count: Some(3), resolution: Some("2k".into()),
+            ..Default::default()
+        };
+        let (c, d) = cost(&r, &f, 0.5);
+        close(c, (3.0 * 0.1 + 2.0 * 0.3) * 0.5);
+        assert!(d.contains("输入:3张"), "detail = {}", d);
+        assert!(d.contains("生成:2张"), "detail = {}", d);
+    }
+
+    #[test]
+    fn image_io_unmatched_resolution_uses_highest_tier() {
+        let r = rule("requests", "image_resolution_io", json!([
+            { "resolution": "1k", "input_rate": 0.05, "rate": 0.1, "enabled": true },
+            { "resolution": "2k", "input_rate": 0.1, "rate": 0.3, "enabled": true },
+        ]), json!({}));
+        let f = ExtractedFeatures {
+            image_count: Some(1), image_ref_count: Some(2), resolution: Some("8k".into()),
+            ..Default::default()
+        };
+        let (c, d) = cost(&r, &f, 1.0);
+        close(c, 2.0 * 0.1 + 1.0 * 0.3);
+        assert!(d.contains("兜底最高阶梯(2k)"), "detail = {}", d);
+    }
+
+    #[test]
+    fn image_io_tier_without_input_rate_defaults_to_zero() {
+        let r = rule("requests", "image_resolution_io",
+            json!([{ "resolution": "2k", "rate": 0.3, "enabled": true }]), json!({}));
+        let f = ExtractedFeatures {
+            image_count: Some(2), image_ref_count: Some(3), resolution: Some("2k".into()),
+            ..Default::default()
+        };
+        close(cost(&r, &f, 1.0).0, 2.0 * 0.3);
+    }
+
+    #[test]
+    fn video_io_splits_input_and_output_seconds_plus_extra_images() {
+        let r = rule("duration", "video_seconds_io",
+            json!([{ "resolution": "2k", "input_rate": 0.15, "rate": 0.8, "enabled": true }]),
+            json!({ "free_image_count": 5 }));
+        let f = ExtractedFeatures {
+            duration_seconds: Some(10.0), video_ref_seconds: Some(4.0),
+            image_ref_count: Some(7), resolution: Some("2k".into()),
+            ..Default::default()
+        };
+        let (c, d) = cost(&r, &f, 1.0);
+        close(c, 10.0 * 0.8 + 4.0 * 0.15 + 2.0 * 0.2);
+        assert!(d.contains("输入:4.00秒"), "detail = {}", d);
+        assert!(d.contains("输入图超额:2张(共7张,免费5张)"), "detail = {}", d);
+    }
+
+    /// 第一步不引入网络探测：上游没回输入秒时输入侧按 0 计，不得凭空收费
+    #[test]
+    fn video_io_without_upstream_input_seconds_charges_zero_input() {
+        let r = rule("duration", "video_seconds_io",
+            json!([{ "resolution": "2k", "input_rate": 0.15, "rate": 0.8, "enabled": true }]),
+            json!({ "free_image_count": 5 }));
+        let f = ExtractedFeatures {
+            duration_seconds: Some(10.0), resolution: Some("2k".into()),
+            ..Default::default()
+        };
+        close(cost(&r, &f, 1.0).0, 10.0 * 0.8);
+    }
+
+    #[test]
+    fn video_io_images_within_free_count_are_not_billed() {
+        let r = rule("duration", "video_seconds_io",
+            json!([{ "resolution": "2k", "input_rate": 0.15, "rate": 0.8, "enabled": true }]),
+            json!({ "free_image_count": 5 }));
+        let f = ExtractedFeatures {
+            duration_seconds: Some(10.0), image_ref_count: Some(3), resolution: Some("2k".into()),
+            ..Default::default()
+        };
+        close(cost(&r, &f, 1.0).0, 10.0 * 0.8);
+    }
+
+    #[test]
+    fn video_io_skips_disabled_tiers() {
+        let r = rule("duration", "video_seconds_io", json!([
+            { "resolution": "4k", "input_rate": 0.5, "rate": 2.0, "enabled": false },
+            { "resolution": "2k", "input_rate": 0.15, "rate": 0.8, "enabled": true },
+        ]), json!({}));
+        let f = ExtractedFeatures {
+            duration_seconds: Some(10.0), video_ref_seconds: Some(4.0), resolution: Some("2k".into()),
+            ..Default::default()
+        };
+        close(cost(&r, &f, 1.0).0, 10.0 * 0.8 + 4.0 * 0.15);
+    }
+
+    // ---- 存量回归：新字段不得改变任何既有模式的金额 ----
+
+    #[test]
+    fn legacy_image_resolution_ignores_input_rate() {
+        let r = rule("requests", "image_resolution",
+            json!([{ "resolution": "2k", "input_rate": 0.1, "rate": 0.3, "enabled": true }]), json!({}));
+        let f = ExtractedFeatures {
+            image_count: Some(2), image_ref_count: Some(3), resolution: Some("2k".into()),
+            ..Default::default()
+        };
+        close(cost(&r, &f, 0.5).0, 2.0 * 0.3 * 0.5);
+    }
+
+    #[test]
+    fn legacy_minimax_h3_ignores_input_side() {
+        let r = rule("duration", "minimax_h3",
+            json!([{ "resolution": "2k", "input_rate": 0.15, "rate": 0.8, "enabled": true }]),
+            json!({ "free_image_count": 5 }));
+        let f = ExtractedFeatures {
+            duration_seconds: Some(10.0), video_ref_seconds: Some(4.0),
+            image_ref_count: Some(7), resolution: Some("2k".into()),
+            ..Default::default()
+        };
+        close(cost(&r, &f, 1.0).0, 10.0 * 0.8 + 2.0 * 0.2);
+    }
+
+    #[test]
+    fn legacy_standard_duration_ignores_video_ref_seconds() {
+        let r = rule("duration", "standard", json!([]), json!({}));
+        let f = ExtractedFeatures {
+            duration_seconds: Some(10.0), video_ref_seconds: Some(4.0),
+            ..Default::default()
+        };
+        close(cost(&r, &f, 1.0).0, 10.0 * 0.5);
+    }
+
+    // ---- 取数侧 ----
+
+    #[test]
+    fn video_ref_seconds_read_from_all_usage_aliases() {
+        for key in ["input_video_duration", "input_seconds", "InputSeconds"] {
+            let mut u = serde_json::Map::new();
+            u.insert(key.to_string(), json!(4.5));
+            let f = extract_request_features(&json!({ "usage": u }));
+            assert_eq!(f.video_ref_seconds, Some(4.5), "key={}", key);
+        }
+        let f = extract_request_features(&json!({ "task": { "usage": { "input_seconds": "3.5" } } }));
+        assert_eq!(f.video_ref_seconds, Some(3.5));
+    }
+
+    #[test]
+    fn video_ref_seconds_rejects_non_positive_and_missing() {
+        for v in [json!(0), json!(-1), json!(null), json!("abc")] {
+            let f = extract_request_features(&json!({ "usage": { "input_seconds": v } }));
+            assert_eq!(f.video_ref_seconds, None, "v={}", v);
+        }
+        assert_eq!(extract_request_features(&json!({})).video_ref_seconds, None);
+    }
+
+    #[test]
+    fn settlement_usage_overrides_video_ref_seconds() {
+        let mut f = ExtractedFeatures { video_ref_seconds: Some(1.0), ..Default::default() };
+        f.merge(extract_request_features(&json!({ "usage": { "input_video_duration": 7.0 } })));
+        assert_eq!(f.video_ref_seconds, Some(7.0));
     }
 }
