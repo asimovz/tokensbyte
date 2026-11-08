@@ -34,7 +34,8 @@ impl Database {
         let pool = loop {
             attempts += 1;
             match PgPoolOptions::new()
-                .max_connections(20)
+                // PG 可用连接 297（max_connections=300 减 3 预留）；3 节点 x 50 = 150，加节点前需重算
+                .max_connections(50)
                 .acquire_timeout(std::time::Duration::from_secs(5))
                 .after_connect(|conn, _meta| {
                     Box::pin(async move {
