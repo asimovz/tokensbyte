@@ -144,6 +144,9 @@ pub async fn select_channel(
         channels.iter().map(|c| c.id).collect::<Vec<i64>>()
     );
 
+    // 记录过滤前库候选数：区分「该模型无路由」(404) 与「有渠道但被熔断/额度全过滤」(429)
+    let db_candidate_n = channels.len();
+
     // 预加载非 HA 渠道绑定的上游预设，过滤禁用 / 额度耗尽的预设
     let preset_ids: Vec<i64> = channels
         .iter()
@@ -223,7 +226,13 @@ pub async fn select_channel(
             user_group,
             level_id
         );
-        return Err(AppError::NotFound(err_msg));
+        // 有候选但被熔断/额度/黑名单全过滤 → 暂时无容量，429 让客户端退避重试；
+        // 库里根本没有该 模型+分组 候选 → 才是真正的 404「无此模型」
+        return Err(if db_candidate_n == 0 {
+            AppError::NotFound(err_msg)
+        } else {
+            AppError::TooManyRequests(err_msg)
+        });
     }
 
     // 物理渠 / HA 子渠：最高 priority 档内按 weight 比例随机分流
@@ -288,7 +297,7 @@ pub async fn select_channel(
             if channels.is_empty() {
                 let err_msg = format!("No available channels found for model {}", model);
                 tracing::warn!("[SelectChannel] HA组 {} 子渠已耗尽", group_id);
-                return Err(AppError::NotFound(err_msg));
+                return Err(AppError::TooManyRequests(err_msg));
             }
             continue;
         }
@@ -312,7 +321,7 @@ pub async fn select_channel(
         if top_subs.is_empty() {
             channels.retain(|c| c.id != group_id);
             if channels.is_empty() {
-                return Err(AppError::NotFound(format!(
+                return Err(AppError::TooManyRequests(format!(
                     "No available channels found for model {}",
                     model
                 )));

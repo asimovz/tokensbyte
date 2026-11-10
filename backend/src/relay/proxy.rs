@@ -525,7 +525,7 @@ pub async fn select_channel_with_db(
                     None,
                     Some(token.id),
                     model,
-                    404,
+                    e.http_status(),
                     endpoint,
                     &msg,
                     None,
