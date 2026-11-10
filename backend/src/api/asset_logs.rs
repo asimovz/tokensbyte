@@ -153,18 +153,18 @@ pub async fn list_asset_logs(
         }
     }
 
-    // date_from / date_to（created_at 是 TEXT，格式 "YYYY-MM-DD HH:MM:SS+00"）
+    // date_from / date_to（created_at 为 timestamptz，绑定参数是 text，需显式 cast）
     if let Some(ref df) = q.date_from {
         if !df.is_empty() {
-            conditions.push(format!("l.created_at >= ${}", idx));
+            conditions.push(format!("l.created_at >= ${}::timestamptz", idx));
             params.push(format!("{} 00:00:00", df));
             idx += 1;
         }
     }
     if let Some(ref dt) = q.date_to {
         if !dt.is_empty() {
-            conditions.push(format!("l.created_at <= ${}", idx));
-            params.push(format!("{} 23:59:59+999", dt));
+            conditions.push(format!("l.created_at <= ${}::timestamptz", idx));
+            params.push(format!("{} 23:59:59.999999", dt));
             idx += 1;
         }
     }
