@@ -34,6 +34,18 @@ pub async fn chat_completions(
         .ok_or_else(|| AppError::BadRequest("Missing required parameter: model".to_string()))?;
     let is_stream = body["stream"].as_bool().unwrap_or(false);
 
+    // 聊天接口必填 messages：缺失/非数组/空数组直接 400，不进 HA 尝试链、不打上游
+    if !body
+        .get("messages")
+        .and_then(|v| v.as_array())
+        .map(|m| !m.is_empty())
+        .unwrap_or(false)
+    {
+        return Err(AppError::BadRequest(
+            "messages is required for chat completion".to_string(),
+        ));
+    }
+
     let ctx = proxy::get_user_context(&state, &token.user_id).await?;
     proxy::check_model_permission(&state, &token, model, "/v1/chat/completions", Some("聊天"))
         .await?;
