@@ -309,6 +309,36 @@ impl MemoryQuotaGuard {
         self.slots.retain(|k, _| !k.starts_with(&prefix));
     }
 
+    /// 内存判出耗尽后回查一次 api_tokens（主键单行）：库里未超限则重建 slot 放行，库里也超了才拒绝。
+    pub async fn recheck_exhausted(
+        &self,
+        db: &Database,
+        token_id: i64,
+        timedisplay: &str,
+        limits: &QuotaLimits,
+        err: QuotaMemoryError,
+    ) -> Result<(), QuotaMemoryError> {
+        if matches!(err, QuotaMemoryError::Db(_)) {
+            return Err(err);
+        }
+        let keys = local_period_keys(timedisplay);
+        self.invalidate_token(token_id);
+        self.hydrate_slot(db, token_id, &keys, limits).await?;
+        let slot = self
+            .slots
+            .get(&Self::slot_key(token_id, &keys.day))
+            .ok_or(QuotaMemoryError::DailyExhausted)?;
+        let res = Self::assert_under_limit(&slot);
+        if res.is_ok() {
+            tracing::info!(
+                "[QuotaMemory] 额度回查放行 令牌ID={} 内存原因={}",
+                token_id,
+                err
+            );
+        }
+        res
+    }
+
     /// 退款前确保 slot 存在（miss 则 hydrate），避免静默丢弃。
     pub async fn apply_refund_ensured(
         &self,

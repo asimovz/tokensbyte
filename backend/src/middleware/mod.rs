@@ -365,11 +365,21 @@ pub async fn api_key_middleware(
 
         // 内存拦截器：DashMap miss 时从 DB hydration，覆盖日/周/月/总额度
         let limits = crate::relay::quota_memory::limits_from_token(&token);
-        if let Err(e) = state
+        let quota_check = state
             .quota_memory
             .check_quota(&state.db, token.id, &timedisplay, &limits)
-            .await
-        {
+            .await;
+        // 内存判出耗尽时回查一次 DB，避免调额/清零/退款后按旧用量误拦
+        let quota_check = match quota_check {
+            Err(e) => {
+                state
+                    .quota_memory
+                    .recheck_exhausted(&state.db, token.id, &timedisplay, &limits, e)
+                    .await
+            }
+            ok => ok,
+        };
+        if let Err(e) = quota_check {
             let err_msg = e.to_string();
             if !skip_log {
                 crate::relay::proxy::record_error_log(

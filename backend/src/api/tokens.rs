@@ -373,6 +373,9 @@ pub async fn update_token(
     .execute(&state.db.pool)
     .await?;
 
+    // 调额后丢弃内存限额 slot，避免按旧上限继续拦截
+    state.quota_memory.invalidate_token(id);
+
     enrich_token_period_usage(&state, std::slice::from_mut(&mut token)).await;
     token.token_key = mask_token_key(&token.token_key);
     Ok(Json(token))
