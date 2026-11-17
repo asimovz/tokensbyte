@@ -5,7 +5,7 @@
  * @license        MIT (https://www.tokensbyte.ai/)
  */
 
-//! 上游素材绑定管理（upstream_asset_bindings CRUD + 连通性测试）
+//! 上游素材绑定管理（upstream_asset_bindings CRUD）
 //!
 //! 绑定 = 指定哪个上游渠道承担素材接口透传（凭证读 channel_configs，绑定只存指针与素材路径后缀）。
 //! 供 /api?Action= 透传分支与视频生成素材转换共用。
@@ -506,41 +506,4 @@ pub async fn delete_binding(
         return Err(AppError::NotFound("素材绑定不存在".into()));
     }
     Ok(Json(serde_json::json!({ "success": true })))
-}
-
-/// 连通性测试：以绑定的渠道凭证对上游发起轻量 ListAssetGroups
-pub async fn test_binding(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<i64>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    use crate::services::upstream_asset_client as uac;
-    let creds = uac::load_binding_endpoints(&state.db, &[id]).await;
-    let Some(be) = creds.get(&id).cloned() else {
-        return Err(AppError::BadRequest(
-            "绑定不存在，或渠道已停用/凭证缺失".into(),
-        ));
-    };
-    let api_key = be.auth.api_key.clone();
-    let ctx = uac::UpstreamCallCtx {
-        http: &state.http_client,
-        db: &state.db,
-        user_id: "admin",
-        plugin_name: uac::PLUGIN_NAME,
-        endpoint_base: &be.endpoint,
-        api_key: &api_key,
-        auth: Some(&be.auth),
-    };
-    let start = std::time::Instant::now();
-    match uac::call_action_logged(&ctx, "ListAssetGroups", &serde_json::json!({})).await {
-        Ok(res) => Ok(Json(serde_json::json!({
-            "ok": true,
-            "latency_ms": start.elapsed().as_millis() as u64,
-            "response": res,
-        }))),
-        Err(e) => Ok(Json(serde_json::json!({
-            "ok": false,
-            "latency_ms": start.elapsed().as_millis() as u64,
-            "error": e.to_string(),
-        }))),
-    }
 }

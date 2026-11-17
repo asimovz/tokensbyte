@@ -113,10 +113,6 @@ pub fn build_router(state: Arc<AppState>) -> Router {
                 .delete(upstream_asset_bindings::delete_binding),
         )
         .route(
-            "/upstream-asset-bindings/{id}/test",
-            post(upstream_asset_bindings::test_binding),
-        )
-        .route(
             "/upstreams",
             get(upstreams::list_upstreams).post(upstreams::create_upstream),
         )
