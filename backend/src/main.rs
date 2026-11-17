@@ -197,20 +197,17 @@ async fn main() -> anyhow::Result<()> {
         },
     ));
 
-    // 6. 每日维护（下一次 UTC 03:00）：日志大字段清理/归档 + TOS 过期 + 火山素材保留清理
+    // 6. 每日维护（下一次 UTC 21:00 = 站点 05:00）：日志正文按 id 窗口三台分片清理，
+    //    归档 / TOS 过期 / 火山素材保留清理由抢到协调者锁的一台执行
     bg_handles.push({
         let state_clone = state.clone();
         let mut rx = shutdown_rx.clone();
         tokio::spawn(async move {
             loop {
-                let wait = duration_until_next_utc_hms(3, 0, 0);
+                let wait = duration_until_next_utc_hms(21, 0, 0);
                 tokio::select! {
                     _ = tokio::time::sleep(wait) => {
-                        cleanup_log_content(&state_clone).await;
-                        archive_old_logs(&state_clone).await;
-                        relay::tos_persist::cleanup_expired_files(&state_clone).await;
-                        #[cfg(feature = "commercial_plugins")]
-                        api::plugins::assets::cleanup_expired_volc_assets(&state_clone).await;
+                        run_daily_maintenance(&state_clone).await;
                     }
                     _ = rx.changed() => return,
                 }
@@ -388,51 +385,191 @@ async fn fetch_storage_settings(state: &AppState) -> models::StorageSettings {
     }
 }
 
-/// 清理超期日志的大字段内容（request_content / response_content / upstream_req_content）
-/// 仅置 NULL，不删除日志记录，统计数据不受影响
-async fn cleanup_log_content(state: &AppState) {
+// 每日维护的日志正文清理：分片键用连续 id 窗口，不用 `id % 3`。
+// 实测取模谓词走 Parallel Seq Scan（整堆重扫），而 `id >= ? AND id < ? ORDER BY id` 走
+// Index Scan using logs_pkey，单批只碰自己那段；窗口归属用会话级咨询锁表达，见下。
+const PURGE_LOCK_CLASS: i32 = 821_103;
+/// 咨询锁 objid：0 = 协调者，1.. = 窗口号 + 1。
+const PURGE_OBJ_COORDINATOR: i32 = 0;
+const PURGE_OBJ_WINDOW_BASE: i32 = 1;
+/// 实测待清行集中在刚过保留线的一条带上（约 20 万 id 宽），窗口必须明显小于它，否则三台只有一台有活。
+const PURGE_ID_WINDOW: i64 = 25_000;
+/// 单批行数与改造前一致：3 台各 1 万元组锁仍在 max_locks_per_transaction=64 的容量内。
+const PURGE_BATCH_ROWS: i64 = 10_000;
+const PURGE_SOFT_TIMEOUT_SECS: u64 = 3 * 60 * 60;
+const PURGE_STATEMENT_TIMEOUT_MS: &str = "1200000";
+/// 本机已无待清窗口、但还有窗口在别人手里时的重试间隔。
+const PURGE_IDLE_WAIT_SECS: u64 = 60;
+
+/// 在专用连接上试抢一把会话级咨询锁；锁跟连接走，进程重启即释放。
+async fn try_take_purge_lock(conn: &mut sqlx::PgConnection, objid: i32) -> bool {
+    sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_lock(?, ?)")
+        .bind(PURGE_LOCK_CLASS)
+        .bind(objid)
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap_or(false)
+}
+
+/// 只放掉这一把窗口锁，好让别的节点立刻接走。
+async fn release_purge_lock(conn: &mut sqlx::PgConnection, objid: i32) {
+    let _ = sqlx::query("SELECT pg_advisory_unlock(?, ?)")
+        .bind(PURGE_LOCK_CLASS)
+        .bind(objid)
+        .execute(&mut *conn)
+        .await;
+}
+
+/// 连接还池前的收尾：放掉本连接全部咨询锁并恢复语句超时，否则会传染正常请求。
+async fn release_purge_locks(conn: &mut sqlx::PgConnection) {
+    let _ = sqlx::query("SELECT pg_advisory_unlock_all()")
+        .execute(&mut *conn)
+        .await;
+    let _ = sqlx::query("RESET statement_timeout")
+        .execute(&mut *conn)
+        .await;
+}
+
+/// 每日维护入口：正文清理三台一起做，非正文类任务只由抢到协调者锁的一台做。
+async fn run_daily_maintenance(state: &AppState) {
     let retention_days = fetch_storage_settings(state).await.log_retention_days;
-    if retention_days <= 0 {
-        return;
+
+    // 会话级锁必须绑一条固定连接；走 pool 每次换连接，锁当场就没了。
+    let mut conn = match state.db.pool.acquire().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("每日维护: 取专用连接失败，本轮跳过: {}", e);
+            return;
+        }
+    };
+    let _ = sqlx::query(&format!(
+        "SET statement_timeout = {}",
+        PURGE_STATEMENT_TIMEOUT_MS
+    ))
+    .execute(&mut *conn)
+    .await;
+
+    if try_take_purge_lock(&mut *conn, PURGE_OBJ_COORDINATOR).await {
+        archive_old_logs(state).await;
+        relay::tos_persist::cleanup_expired_files(state).await;
+        #[cfg(feature = "commercial_plugins")]
+        api::plugins::assets::cleanup_expired_volc_assets(state).await;
     }
 
-    // 分批清理，每批 10000 条，避免长事务锁表
+    if retention_days > 0 {
+        purge_log_bodies(state, &mut *conn, retention_days).await;
+    }
+    release_purge_locks(&mut *conn).await;
+}
+
+/// 按 id 窗口抢锁清理超期日志正文，只置 NULL 不删行；清完自己的窗口就去接别人没锁住的。
+async fn purge_log_bodies(
+    state: &AppState,
+    conn: &mut sqlx::PgConnection,
+    retention_days: i32,
+) -> u64 {
+    let max_id = sqlx::query_scalar::<_, Option<i64>>("SELECT max(id) FROM logs")
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap_or(None)
+        .unwrap_or(0);
+    let windows = (max_id / PURGE_ID_WINDOW + 1).min(8192) as i32;
     let cleanup_sql = state.db.format_query(
         "UPDATE logs SET request_content = NULL, response_content = NULL, upstream_req_content = NULL, post_response = NULL \
          WHERE id IN (\
             SELECT id FROM logs \
             WHERE created_at < CURRENT_TIMESTAMP - (? * INTERVAL '1 day') \
+              AND id >= ? AND id < ? \
               AND (request_content IS NOT NULL OR response_content IS NOT NULL OR upstream_req_content IS NOT NULL OR post_response IS NOT NULL) \
-            LIMIT 10000\
+            ORDER BY id \
+            LIMIT ?\
          )"
     );
 
-    loop {
-        let result = sqlx::query(&cleanup_sql)
-            .bind(retention_days as f64)
-            .execute(&state.db.pool)
-            .await;
+    let started = std::time::Instant::now();
+    let deadline = started + std::time::Duration::from_secs(PURGE_SOFT_TIMEOUT_SECS);
+    let mut pending: Vec<i32> = (0..windows).collect();
+    let mut total: u64 = 0;
+    let mut rounds: u32 = 0;
 
-        match result {
-            Ok(r) => {
-                let affected = r.rows_affected();
-                if affected > 0 {
-                    tracing::info!(
-                        "🧹 日志清理: 已清理 {} 条超过 {} 天的日志详情",
-                        affected,
-                        retention_days
-                    );
-                }
-                if affected < 10000 {
-                    break;
-                }
+    while !pending.is_empty() {
+        rounds += 1;
+        let mut waiting: Vec<i32> = Vec::new();
+        for window in std::mem::take(&mut pending) {
+            if !try_take_purge_lock(conn, PURGE_OBJ_WINDOW_BASE + window).await {
+                waiting.push(window);
+                continue;
             }
+            total += purge_id_window(&cleanup_sql, conn, retention_days, window, deadline).await;
+            release_purge_lock(conn, PURGE_OBJ_WINDOW_BASE + window).await;
+        }
+        pending = waiting;
+        let timed_out = std::time::Instant::now() >= deadline;
+        if pending.is_empty() || timed_out {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(PURGE_IDLE_WAIT_SECS)).await;
+    }
+
+    if rounds > 1 || total > 0 {
+        tracing::info!(
+            "🧹 日志正文分片清理: 窗口 {} 个 / 轮数 {} / 清理 {} 行 / 用时 {}s",
+            windows,
+            rounds,
+            total,
+            started.elapsed().as_secs()
+        );
+    }
+    total
+}
+
+/// 清一个 id 窗口内的残留正文，一批一批做；出错就结束本窗口（与改造前一致，不重扫）。
+async fn purge_id_window(
+    sql: &str,
+    conn: &mut sqlx::PgConnection,
+    retention_days: i32,
+    window: i32,
+    deadline: std::time::Instant,
+) -> u64 {
+    let lo = i64::from(window) * PURGE_ID_WINDOW;
+    let hi = lo + PURGE_ID_WINDOW;
+    let mut purged: u64 = 0;
+
+    loop {
+        let affected = match sqlx::query(sql)
+            .bind(f64::from(retention_days))
+            .bind(lo)
+            .bind(hi)
+            .bind(PURGE_BATCH_ROWS)
+            .execute(&mut *conn)
+            .await
+        {
+            Ok(r) => r.rows_affected(),
             Err(e) => {
-                tracing::error!("日志清理失败: {}", e);
-                break;
+                tracing::error!("日志清理: 窗口 {}..{} 批次失败，本窗口结束: {}", lo, hi, e);
+                return purged;
             }
+        };
+        purged += affected;
+        if affected < PURGE_BATCH_ROWS as u64 {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            tracing::warn!("日志清理: 窗口 {}..{} 触及软超时，剩余留给下一轮", lo, hi);
+            break;
         }
     }
+
+    if purged > 0 {
+        tracing::info!(
+            "🧹 日志清理: 窗口 {}..{} 已清理 {} 条超过 {} 天的日志详情",
+            lo,
+            hi,
+            purged,
+            retention_days
+        );
+    }
+    purged
 }
 
 /// 将超期日志行迁入 logs_archive 并从热表删除（分批；`log_row_retention_days<=0` 时跳过）。
