@@ -998,7 +998,13 @@ fn is_client_side_http_status(status: u16) -> bool {
     matches!(status, 400 | 402 | 403 | 422)
 }
 
-/// 仅 HA 子渠且策略开启时 exclude（并可能熔断）；黑名单命中则停止切换；400/402/403/422 只切换不熔断
+/// 上游把请求形态本身拒了（体积超限 / 媒体类型不支持）：换一家同样失败
+#[inline]
+fn is_passthrough_http_status(status: u16) -> bool {
+    matches!(status, 413 | 415)
+}
+
+/// 仅 HA 子渠且策略开启时 exclude（并可能熔断）；黑名单命中则停止切换；400/402/403/422 只切换不熔断；413/415 直返客户
 fn try_failover(
     state: &Arc<AppState>,
     failover_on: bool,
@@ -1023,6 +1029,16 @@ fn try_failover(
             yid_disp,
             aid,
             pattern
+        );
+        return false;
+    }
+
+    if is_passthrough_http_status(status) {
+        tracing::info!(
+            "[HA] 直返客户错误 状态码={} 上游YID={} 子渠标识={}（不切换、不熔断）",
+            status,
+            yid_disp,
+            aid
         );
         return false;
     }
