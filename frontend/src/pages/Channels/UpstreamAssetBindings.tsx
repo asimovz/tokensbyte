@@ -7,7 +7,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { Table, Button, Space, Modal, Form, Input, Select, Switch, message, Popconfirm, Card, Typography, Tag, Tooltip } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, ApiOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
 
 const { Title, Text, Link } = Typography;
@@ -90,7 +90,6 @@ const UpstreamAssetBindings: React.FC = () => {
   const [modalVisible, setModalVisible] = useState(false);
   const [editing, setEditing] = useState<BindingRow | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [testingId, setTestingId] = useState<number | null>(null);
   const [form] = Form.useForm();
 
   const fetchBindings = async () => {
@@ -227,22 +226,6 @@ const UpstreamAssetBindings: React.FC = () => {
     }
   };
 
-  const handleTest = async (record: BindingRow) => {
-    setTestingId(record.id);
-    try {
-      const resp = await (request.post(`/upstream-asset-bindings/${record.id}/test`) as unknown as Promise<{ ok: boolean; latency_ms: number; error?: string }>);
-      if (resp.ok) {
-        message.success(`连通正常（${resp.latency_ms}ms）`);
-      } else {
-        message.error(`连通失败：${resp.error || '未知错误'}`);
-      }
-    } catch (e: any) {
-      message.error(e?.response?.data?.error || '测试失败');
-    } finally {
-      setTestingId(null);
-    }
-  };
-
   const columns = [
     {
       title: 'ID',
@@ -323,16 +306,6 @@ const UpstreamAssetBindings: React.FC = () => {
       )),
     },
     {
-      title: '上游素材组',
-      dataIndex: 'group_id',
-      width: 180,
-      render: (v?: string | null) => (v ? (
-        <Tooltip title="系统自动创建并回写的上游素材组，用于素材转换时的归属">
-          <Text code copyable>{v}</Text>
-        </Tooltip>
-      ) : <Text type="secondary">未创建</Text>),
-    },
-    {
       title: '状态',
       dataIndex: 'is_active',
       width: 80,
@@ -348,17 +321,9 @@ const UpstreamAssetBindings: React.FC = () => {
     },
     {
       title: '操作',
-      width: 220,
+      width: 150,
       render: (_: any, record: BindingRow) => (
         <Space size={4}>
-          <Button
-            size="small"
-            icon={<ApiOutlined />}
-            loading={testingId === record.id}
-            onClick={() => handleTest(record)}
-          >
-            测试
-          </Button>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
           <Popconfirm title="确认删除该绑定？" onConfirm={() => handleDelete(record.id)}>
             <Button size="small" danger icon={<DeleteOutlined />} />
