@@ -1,5 +1,24 @@
 # UPDATE
 
+## 2026-11-19 — 客户模型折扣支持「预约生效」
+
+- 口径：某模型**首次**配折扣仍在用户「模型折扣」页直接填、当场生效；**已有折扣的模型要改值只能提交预约**。预约只有「指定日期、站点时区次日 0 点生效」一种，没有「立即生效」分支
+- 目的：让一个自然日内同一客户同一模型只有一个折扣，日消耗与成本统计不再出现「当天两段」。由于即时保存不再改写已有键，**全库唯一会写折扣值的代码就是 0 点应用器**
+- 当天就要改或改错了：把该模型从「已选模型折扣」里删掉再重新设置（删键与新增键不受限，这是有意保留的唯一后门）
+- 服务端硬拦：`PUT /api/v1/users/{id}` 改到已有 MID 的值直接 400 并列出 MID，绕过前端直调接口同样拦得住
+- 新表 `user_model_discount_schedules`（`pending / applied / cancelled` 三态即变更台账，不再单独做日志表）；同用户 + 同模型 + 同生效日的 pending 唯一（部分唯一索引）
+- 应用器 `run_discount_schedule_loop`：启动先补跑一次（覆盖 0 点发布 / 重启窗口），之后睡到站点时区次日 00:00；0 点这一小时内若失败则每 5 分钟重试。多节点并发靠 `FOR UPDATE SKIP LOCKED` + `users` 行锁 + `status = 'pending'` 判据保证幂等，不引咨询锁
+- 写回只覆盖预约涉及的 MID，其余键逐字节保留；用户已不存在则跳过其预约并告警
+- 新接口：`GET / POST /api/v1/users/{id}/discount-schedules`、`DELETE /api/v1/discount-schedules/{id}`（取消只置 `cancelled` 留痕，不物理删）
+- 台账 `created_at` 由代码显式写站点时区串：该列是 TEXT，列默认值 `now()::text` 会跟 PG 会话时区走（测试机 UTC、生产 Asia/Shanghai），不显式写就会出现两种时间口径
+- 部署需重启后端以执行迁移 `user_model_discount_schedules_v1`
+
+### 涉及文件
+- `backend/src/api/user_discount_schedules.rs`（新增）、`backend/src/api/mod.rs`、`backend/src/api/users.rs`、`backend/src/db/migrations.rs`、`backend/src/main.rs`
+- `frontend/src/pages/Users/Users.tsx`
+
+---
+
 ## 2026-11-04 — 高可用组内可单独配置上游优先级 / 权重
 
 - 优先级 / 权重从「上游渠道配置预设上的全局字段」变成**绑定级**属性：同一条上游可在 A 组当主用、在 B 组当备用，不必再按组复制上游记录
