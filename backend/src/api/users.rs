@@ -352,12 +352,30 @@ pub async fn update_user(
         user.admin_group_id = None;
     }
     // 用户模型单独折扣（空字符串视为清空，存 NULL）
+    // 口径 v2：已有 mid 键的**值**不许被即时保存改写，只能走「模型折扣」页的预约生效；
+    // 新增键（首次配置）与删键不受限。服务端必须拦，否则直接调接口即可绕过预约。
     if let Some(ref md) = request.model_discounts {
-        user.model_discounts = if md.is_empty() {
-            None
-        } else {
-            Some(md.clone())
-        };
+        // 空字符串 = 清空（存 NULL），与既有语义一致；先落成具名值再解析，避开临时值借用
+        let incoming_raw: Option<String> = if md.is_empty() { None } else { Some(md.clone()) };
+        let incoming = crate::api::user_discount_schedules::parse_model_discounts(&incoming_raw);
+        let existing = crate::api::user_discount_schedules::parse_model_discounts(&user.model_discounts);
+        let changed: Vec<String> = existing
+            .keys()
+            .filter(|mid| {
+                match (existing.get(*mid), incoming.get(*mid)) {
+                    (Some(old_v), Some(new_v)) => (old_v - new_v).abs() > 1e-9,
+                    _ => false,
+                }
+            })
+            .cloned()
+            .collect();
+        if !changed.is_empty() {
+            return Err(AppError::BadRequest(format!(
+                "以下 MID 已有折扣，修改请走「模型折扣」页的预约生效（{}）",
+                changed.join("、")
+            )));
+        }
+        user.model_discounts = incoming_raw;
     }
     // 用户级 IP 白名单（逗号分隔 IP/CIDR；空字符串=不限）
     if let Some(ref ips) = request.allowed_ips {

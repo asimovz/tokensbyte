@@ -259,6 +259,13 @@ async fn main() -> anyhow::Result<()> {
         shutdown_rx.clone(),
     )));
 
+    // 10b. 客户模型折扣预约生效：首轮即启动补跑，之后睡到站点时区次日 00:00。
+    // 三台都会跑，靠 FOR UPDATE SKIP LOCKED + users 行锁 + status='pending' 判据保证不重复改写。
+    bg_handles.push(tokio::spawn(api::user_discount_schedules::run_discount_schedule_loop(
+        state.clone(),
+        shutdown_rx.clone(),
+    )));
+
     // 11. 火山方舟视频监控：同步视频列表 + 分账账单 + 超额熔断（每 1 分钟）
     #[cfg(feature = "commercial_plugins")]
     bg_handles.push(spawn_cron_task(

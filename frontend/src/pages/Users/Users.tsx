@@ -230,6 +230,13 @@ const Users: React.FC = () => {
   const [discountMap, setDiscountMap] = useState<Record<string, number>>({});
   /** 已选用于设置折扣的模型 mid 列表 */
   const [discountMids, setDiscountMids] = useState<string[]>([]);
+  // ── 折扣预约（口径 v2：首次即时、修改走预约）；本列表兼折扣变更台账 ──
+  const [discountSchedules, setDiscountSchedules] = useState<any[]>([]);
+  const [schedLoading, setSchedLoading] = useState(false);
+  const [schedSaving, setSchedSaving] = useState(false);
+  const [schedModel, setSchedModel] = useState<string | undefined>(undefined);
+  const [schedDiscount, setSchedDiscount] = useState<number>(0.7);
+  const [schedDate, setSchedDate] = useState<any>(dayjs().add(1, 'day'));
 
   // ── 等级变更历史 ──
   const [levelLogs, setLevelLogs] = useState<any[]>([]);
@@ -372,6 +379,73 @@ const Users: React.FC = () => {
       .finally(() => setKycLoading(false));
   };
 
+  // ── 折扣预约：列表加载 / 提交 / 取消 ──
+  const loadDiscountSchedules = (userId: string) => {
+    setSchedLoading(true);
+    (request.get(`/users/${userId}/discount-schedules`) as unknown as Promise<{ data: any[] }>)
+      .then((res) => setDiscountSchedules(res.data || []))
+      .catch(() => setDiscountSchedules([]))
+      .finally(() => setSchedLoading(false));
+  };
+
+  /** 预约候选 = 该用户 `model_discounts` 里已有折扣键的模型。
+   *  以已落库的 JSON 为准（与 `PUT /users/{id}` 的服务端拦截同一判据）：首次配置的模型走上方即时编辑，不进这里。 */
+  const discountModelOptions = useMemo(() => {
+    const saved: Record<string, number> = (() => {
+      if (!editingUser?.model_discounts) return {};
+      try {
+        return JSON.parse(editingUser.model_discounts);
+      } catch {
+        return {};
+      }
+    })();
+    return Object.entries(saved).map(([mid, v]) => ({
+      value: mid,
+      label: `${availableModels.find((m: any) => m.mid === mid)?.name || mid}（当前 ${v}x）· MID ${mid}`,
+    }));
+  }, [availableModels, editingUser]);
+
+  const handleAddSchedule = async () => {
+    if (!editingUser || !schedModel) {
+      message.warning('请先选择要预约修改的模型（下拉只列已配置折扣的模型）');
+      return;
+    }
+    if (!(schedDiscount > 0) || schedDiscount > 2) {
+      message.warning('折扣倍率必须大于 0 且不超过 2');
+      return;
+    }
+    const eff = schedDate && dayjs.isDayjs(schedDate) ? schedDate.format('YYYY-MM-DD') : '';
+    if (!eff || !schedDate.isAfter(dayjs(), 'day')) {
+      message.warning('预约生效日必须晚于今天；今天就要改，请先删除该模型的折扣再重新设置');
+      return;
+    }
+    setSchedSaving(true);
+    try {
+      await request.post(`/users/${editingUser.id}/discount-schedules`, {
+        model_mid: schedModel,
+        discount: schedDiscount,
+        effective_date: eff,
+      });
+      message.success(`已预约：${eff} 00:00（站点时区）起按 ${schedDiscount}x 生效`);
+      loadDiscountSchedules(editingUser.id);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSchedSaving(false);
+    }
+  };
+
+  const handleCancelSchedule = async (scheduleId: number) => {
+    if (!editingUser) return;
+    try {
+      await request.delete(`/discount-schedules/${scheduleId}`);
+      message.success('预约已取消');
+      loadDiscountSchedules(editingUser.id);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const handleEdit = (record: User) => {
     setEditingUser(record);
     setIsModalVisible(true);
@@ -391,6 +465,10 @@ const Users: React.FC = () => {
     const md: Record<string, number> = record.model_discounts ? (() => { try { return JSON.parse(record.model_discounts); } catch { return {}; } })() : {};
     setDiscountMap(md);
     setDiscountMids(Object.keys(md));
+    // 折扣台账随用户切换先清空再拉，避免看到上一个用户的预约记录
+    setDiscountSchedules([]);
+    setSchedModel(undefined);
+    loadDiscountSchedules(record.id);
     if (!isAdminPage) {
       loadUserKyc(record.id);
     } else {
@@ -1329,6 +1407,107 @@ const Users: React.FC = () => {
                             </div>
                           </Col>
                         </Row>
+                        {/* ── 预约修改与折扣记录：已有键的值只能从这里改 ── */}
+                        <div style={{ marginTop: 16, padding: 16, background: _isLight ? '#f9fafb' : 'rgba(255,255,255,0.04)', borderRadius: 8 }}>
+                          <Text strong>预约修改与折扣记录</Text>
+                          <Typography.Text type="secondary" style={{ display: 'block', margin: '4px 0 12px', fontSize: 12 }}>
+                            已有折扣的模型不能当场改值（直接点「保存」会被服务端拦下），只能提交预约：在所选日期的站点时区 0 点生效，下拉只列该用户已配置折扣的模型。首次配置的模型仍直接在上方填写、当场生效。今天就要改或改错了，把该模型从「已选」里删掉再重新设置。
+                          </Typography.Text>
+                          <Space wrap size={8} style={{ marginBottom: 12 }}>
+                            <Select
+                              showSearch
+                              size="small"
+                              style={{ width: 320 }}
+                              placeholder="选择要预约修改的模型"
+                              value={schedModel}
+                              onChange={(v) => setSchedModel(v)}
+                              options={discountModelOptions}
+                              optionFilterProp="label"
+                              notFoundContent="该用户还没有已配置折扣的模型，直接在上方「已选模型折扣」填写保存即可"
+                            />
+                            <InputNumber
+                              size="small"
+                              min={0}
+                              max={2}
+                              step={0.01}
+                              precision={3}
+                              value={schedDiscount}
+                              onChange={(v) => setSchedDiscount(v ?? 0.7)}
+                              style={{ width: 120 }}
+                              addonAfter="x"
+                            />
+                            <DatePicker
+                              size="small"
+                              value={schedDate}
+                              onChange={(d) => setSchedDate(d)}
+                              disabledDate={(cur) => !!cur && !cur.isAfter(dayjs(), 'day')}
+                            />
+                            <Button size="small" type="primary" loading={schedSaving} onClick={handleAddSchedule}>
+                              提交预约
+                            </Button>
+                          </Space>
+                          <Table
+                            size="small"
+                            rowKey="id"
+                            loading={schedLoading}
+                            dataSource={discountSchedules}
+                            pagination={discountSchedules.length > 8 ? { pageSize: 8, size: 'small' } : false}
+                            locale={{ emptyText: '还没有折扣预约或变更记录' }}
+                            columns={[
+                              {
+                                title: '模型',
+                                dataIndex: 'model_mid',
+                                render: (_: any, r: any) => (
+                                  <div>
+                                    <div style={{ fontSize: 13 }}>{r.model_name || r.model_mid}</div>
+                                    <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>MID {r.model_mid}</div>
+                                  </div>
+                                ),
+                              },
+                              { title: '折扣', dataIndex: 'discount', width: 80, render: (v: number) => `${v}x` },
+                              { title: '生效日', dataIndex: 'effective_date', width: 110 },
+                              {
+                                title: '状态',
+                                dataIndex: 'status',
+                                width: 90,
+                                render: (v: string) => {
+                                  const meta = v === 'pending'
+                                    ? { color: 'blue', text: '待生效' }
+                                    : v === 'applied'
+                                      ? { color: 'green', text: '已生效' }
+                                      : { color: 'default', text: '已取消' };
+                                  return <Tag color={meta.color} style={{ margin: 0 }}>{meta.text}</Tag>;
+                                },
+                              },
+                              {
+                                title: '提交人 / 时间',
+                                dataIndex: 'created_by',
+                                width: 180,
+                                render: (_: any, r: any) => (
+                                  <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                                    <div>{r.created_by || '—'}</div>
+                                    <div>{r.created_at}</div>
+                                    {r.applied_at ? <div>生效于 {r.applied_at}</div> : null}
+                                  </div>
+                                ),
+                              },
+                              {
+                                title: '操作',
+                                width: 90,
+                                render: (_: any, r: any) => (r.status === 'pending' ? (
+                                  <Popconfirm
+                                    title="取消这条待生效预约？"
+                                    okText="取消预约"
+                                    cancelText="返回"
+                                    onConfirm={() => handleCancelSchedule(r.id)}
+                                  >
+                                    <Button type="link" size="small" danger>取消</Button>
+                                  </Popconfirm>
+                                ) : null),
+                              },
+                            ]}
+                          />
+                        </div>
                       </div>
                     )
                   }] : []),

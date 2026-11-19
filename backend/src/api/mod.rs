@@ -41,6 +41,7 @@ pub mod user;
 pub mod user_kyc;
 pub mod user_levels;
 pub mod users;
+pub mod user_discount_schedules;
 pub mod user_models;
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -62,6 +63,16 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/users/{id}/kyc",
             get(user_kyc::admin_get_user_kyc).put(user_kyc::admin_upsert_user_kyc),
+        )
+        // 客户模型折扣预约生效：列表即变更台账（pending/applied/cancelled）
+        .route(
+            "/users/{id}/discount-schedules",
+            get(user_discount_schedules::list_user_discount_schedules)
+                .post(user_discount_schedules::create_discount_schedule),
+        )
+        .route(
+            "/discount-schedules/{id}",
+            delete(user_discount_schedules::cancel_discount_schedule),
         )
         .route("/channels", post(channels::create_channel))
         .route(

@@ -3480,6 +3480,31 @@ macro_rules! pg_migration_blocks {
         "ALTER TABLE users DROP COLUMN IF EXISTS model_rpm_limits"
     );
 
+    // ── 客户模型折扣预约生效：队列表兼全量变更台账 ──
+    // 目的：把 users.model_discounts 的切换点对齐站点时区自然日 0 点，避免同一天里
+    // 前后两段不同折扣混进日统计与成本。0 点应用器见 api/user_discount_schedules.rs。
+    // 预约只有「指定日期 0 点生效」一种，applied 行即历史变更史，所以不再单独做日志表。
+    once_migration!(pool, "user_model_discount_schedules_v1",
+        r#"CREATE TABLE IF NOT EXISTS user_model_discount_schedules (
+            id BIGSERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            model_mid TEXT NOT NULL,
+            discount DOUBLE PRECISION NOT NULL,
+            effective_date DATE NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_by TEXT,
+            created_at TEXT NOT NULL DEFAULT (now()::text),
+            applied_at TEXT
+        )"#,
+        // 同一用户+模型+生效日只允许一条待生效，杜绝到点时"到底按哪条"的歧义
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_umds_pending ON user_model_discount_schedules (user_id, model_mid, effective_date) WHERE status = 'pending'",
+        "CREATE INDEX IF NOT EXISTS idx_umds_due ON user_model_discount_schedules (status, effective_date)",
+        "COMMENT ON TABLE user_model_discount_schedules IS '客户模型折扣预约(站点时区 0 点应用器写入 users.model_discounts)；兼折扣变更台账'",
+        "COMMENT ON COLUMN user_model_discount_schedules.model_mid IS 'models.mid（不是 model_id，后者同名模型可重复）'",
+        "COMMENT ON COLUMN user_model_discount_schedules.effective_date IS '站点时区自然日；pending 且 <= 今天即视为到期，由应用器落库'",
+        "COMMENT ON COLUMN user_model_discount_schedules.status IS 'pending 待生效 / applied 已生效 / cancelled 已取消（取消不物理删，留审计）'"
+    );
+
     tracing::info!("PostgreSQL AnyPool migrations completed successfully");
     Ok(())
     }};
