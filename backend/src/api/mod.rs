@@ -246,6 +246,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             .route(
                 "/finance/daily-stats",
                 get(plugins::finance::get_daily_stats),
+            )
+            .route(
+                "/finance/usage-export",
+                get(plugins::finance::usage_export::export_usage_detail),
             );
     }
 

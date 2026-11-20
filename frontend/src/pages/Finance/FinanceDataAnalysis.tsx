@@ -6,7 +6,8 @@
  */
 
 import React, { useEffect, useState, useCallback } from 'react';
-import { Card, DatePicker, Row, Col, Typography, Spin, Segmented } from 'antd';
+import { Card, DatePicker, Row, Col, Typography, Spin, Segmented, Space, Button, message, Tooltip as AntTooltip } from 'antd';
+import { Download } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import request from '../../utils/request';
 import dayjs from 'dayjs';
@@ -86,6 +87,7 @@ const FinanceDataAnalysis: React.FC = () => {
   const [modelRangeMode, setModelRangeMode] = useState<'range' | 'month' | 'all'>('range');
   const [independentModelData, setIndependentModelData] = useState<FinanceModelStat[] | null>(null);
   const [modelLoading, setModelLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const fetchData = async (start: string, end: string) => {
     setLoading(true);
@@ -141,6 +143,42 @@ const FinanceDataAnalysis: React.FC = () => {
     fetchModelStats(modelRangeMode);
   }, [modelRangeMode, fetchModelStats]);
 
+  // 导出窗口由后端固定为「站点时区昨天 0 点 → 此刻」，不吃上方日期选择
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const resp = await request.get('/finance/usage-export', {
+        responseType: 'blob',
+        skipErrorHandler: true,
+      } as any) as any;
+      if (resp instanceof Blob && resp.type?.includes('json')) {
+        const json = JSON.parse(await resp.text());
+        message.error(json.error || '导出失败');
+        return;
+      }
+      const blob = resp instanceof Blob ? resp : new Blob([resp], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `usage_detail_${dayjs().format('YYYYMMDDHHmmss')}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      message.success('导出成功');
+    } catch (e: any) {
+      if (e?.response?.data) {
+        try {
+          const data = e.response.data;
+          const text = data instanceof Blob ? await data.text() : JSON.stringify(data);
+          message.error(JSON.parse(text).error || '导出失败');
+        } catch { message.error('导出失败'); }
+      } else {
+        message.error('导出失败');
+      }
+    } finally {
+      setExporting(false);
+    }
+  };
+
   // 当前模型排行榜显示的数据和时间描述
   const displayModelData = independentModelData !== null ? independentModelData : modelData;
   const modelTimeLabel = modelRangeMode === 'all'
@@ -155,15 +193,22 @@ const FinanceDataAnalysis: React.FC = () => {
         <Title level={4} style={{ margin: 0, color: textColor }}>
           {t('menu.finance_analysis', '财务数据分析')}
         </Title>
-        <RangePicker
-          value={dates}
-          onChange={(val) => {
-            if (val && val[0] && val[1]) {
-              setDates([val[0], val[1]]);
-            }
-          }}
-          allowClear={false}
-        />
+        <Space size={12}>
+          <RangePicker
+            value={dates}
+            onChange={(val) => {
+              if (val && val[0] && val[1]) {
+                setDates([val[0], val[1]]);
+              }
+            }}
+            allowClear={false}
+          />
+          <AntTooltip title="导出「昨天 0 点至此刻」的用户 × 模型 × 供应商用量明细，与上方日期选择无关">
+            <Button icon={<Download size={14} />} loading={exporting} onClick={handleExport}>
+              导出用量明细
+            </Button>
+          </AntTooltip>
+        </Space>
       </div>
 
       <Spin spinning={loading}>
