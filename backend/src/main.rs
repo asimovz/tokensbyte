@@ -410,21 +410,31 @@ const PURGE_IDLE_WAIT_SECS: u64 = 60;
 
 /// 在专用连接上试抢一把会话级咨询锁；锁跟连接走，进程重启即释放。
 async fn try_take_purge_lock(conn: &mut sqlx::PgConnection, objid: i32) -> bool {
-    sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_lock(?, ?)")
+    match sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_lock($1, $2)")
         .bind(PURGE_LOCK_CLASS)
         .bind(objid)
         .fetch_one(&mut *conn)
         .await
-        .unwrap_or(false)
+    {
+        Ok(got) => got,
+        // SQL 报错绝不能当成「锁被别人占着」：那会让清理整轮静默空转，日志上看不出任何异常
+        Err(e) => {
+            tracing::error!("日志清理: 咨询锁 objid={} 申请失败，本轮跳过该锁: {}", objid, e);
+            false
+        }
+    }
 }
 
 /// 只放掉这一把窗口锁，好让别的节点立刻接走。
 async fn release_purge_lock(conn: &mut sqlx::PgConnection, objid: i32) {
-    let _ = sqlx::query("SELECT pg_advisory_unlock(?, ?)")
+    if let Err(e) = sqlx::query("SELECT pg_advisory_unlock($1, $2)")
         .bind(PURGE_LOCK_CLASS)
         .bind(objid)
         .execute(&mut *conn)
-        .await;
+        .await
+    {
+        tracing::error!("日志清理: 咨询锁 objid={} 释放失败，其他节点接不走该窗口: {}", objid, e);
+    }
 }
 
 /// 连接还池前的收尾：放掉本连接全部咨询锁并恢复语句超时，否则会传染正常请求。
@@ -440,6 +450,7 @@ async fn release_purge_locks(conn: &mut sqlx::PgConnection) {
 /// 每日维护入口：正文清理三台一起做，非正文类任务只由抢到协调者锁的一台做。
 async fn run_daily_maintenance(state: &AppState) {
     let retention_days = fetch_storage_settings(state).await.log_retention_days;
+    tracing::info!("🧹 每日维护开始: 正文保留 {} 天", retention_days);
 
     // 会话级锁必须绑一条固定连接；走 pool 每次换连接，锁当场就没了。
     let mut conn = match state.db.pool.acquire().await {
@@ -518,15 +529,14 @@ async fn purge_log_bodies(
         tokio::time::sleep(std::time::Duration::from_secs(PURGE_IDLE_WAIT_SECS)).await;
     }
 
-    if rounds > 1 || total > 0 {
-        tracing::info!(
-            "🧹 日志正文分片清理: 窗口 {} 个 / 轮数 {} / 清理 {} 行 / 用时 {}s",
-            windows,
-            rounds,
-            total,
-            started.elapsed().as_secs()
-        );
-    }
+    // 无条件留一行：让「今晚到底跑没跑、跑了几个窗口、清了几行」永远能从日志直接读出
+    tracing::info!(
+        "🧹 日志正文分片清理: 窗口 {} 个 / 轮数 {} / 清理 {} 行 / 用时 {}s",
+        windows,
+        rounds,
+        total,
+        started.elapsed().as_secs()
+    );
     total
 }
 
