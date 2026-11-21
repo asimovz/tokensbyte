@@ -230,6 +230,21 @@ const Users: React.FC = () => {
   const [discountMap, setDiscountMap] = useState<Record<string, number>>({});
   /** 已选用于设置折扣的模型 mid 列表 */
   const [discountMids, setDiscountMids] = useState<string[]>([]);
+  /** 该客户按其等级在启用渠道里实际能命中的模型行（与计费选渠同源，只读）；预置清单与渠道标签都用它 */
+  const [reachableList, setReachableList] = useState<any[]>([]);
+  const [reachableLoading, setReachableLoading] = useState(false);
+  const [reachableFailed, setReachableFailed] = useState(false);
+  /** 最近一次预置请求属于哪个用户；弹窗切换时丢弃迟到的响应 */
+  const reachableReqRef = React.useRef<string>('');
+  const reachableByMid = useMemo(() => {
+    const map: Record<string, any> = {};
+    for (const item of reachableList) map[item.mid] = item;
+    return map;
+  }, [reachableList]);
+  const presetRowCount = useMemo(
+    () => discountMids.filter((mid) => !!reachableByMid[mid]).length,
+    [discountMids, reachableByMid],
+  );
   // ── 折扣预约（口径 v2：首次即时、修改走预约）；本列表兼折扣变更台账 ──
   const [discountSchedules, setDiscountSchedules] = useState<any[]>([]);
   const [schedLoading, setSchedLoading] = useState(false);
@@ -362,6 +377,9 @@ const Users: React.FC = () => {
     // 清空模型折扣状态
     setDiscountMap({});
     setDiscountMids([]);
+    setReachableList([]);
+    setReachableFailed(false);
+    reachableReqRef.current = '';
     setUserKyc(null);
     setIsModalVisible(true);
   };
@@ -380,6 +398,47 @@ const Users: React.FC = () => {
   };
 
   // ── 折扣预约：列表加载 / 提交 / 取消 ──
+  /** 取「该客户可命中的模型行」。判据全在后端 `/users/{id}/models`：
+   *  启用渠道 + 等级双键（user_group 与等级 ID 两种历史写法都认）+ exclude 命中即排除 + 模型 is_active=1，
+   *  不看额度耗尽 / 熔断 / 预设禁用——面板要反映「给它开了什么」，不能因为渠道今早熔断就少一行。 */
+  const fetchReachableModels = (userId: string): Promise<{ mids: string[]; failed: boolean }> => {
+    setReachableLoading(true);
+    setReachableFailed(false);
+    return (request.get(`/users/${userId}/models`) as unknown as Promise<{ data: any[] }>)
+      .then((res) => {
+        if (reachableReqRef.current !== userId) return { mids: [], failed: false };
+        const list = res?.data || [];
+        setReachableList(list);
+        return { mids: list.map((it: any) => String(it.mid)), failed: false };
+      })
+      .catch(() => {
+        if (reachableReqRef.current === userId) setReachableFailed(true);
+        return { mids: [], failed: true };
+      })
+      .finally(() => {
+        if (reachableReqRef.current === userId) setReachableLoading(false);
+      });
+  };
+
+  /** 「重新预置」= 并集：只补没列进来的行，已有行与已填的折扣值一律不动。 */
+  const handleReapplyPreset = () => {
+    if (!editingUser) return;
+    reachableReqRef.current = editingUser.id;
+    fetchReachableModels(editingUser.id).then(({ mids, failed }) => {
+      if (failed) {
+        message.warning('预置获取失败，仍可手动选择模型');
+        return;
+      }
+      if (mids.length === 0) {
+        message.info('该客户等级在启用渠道里没有可命中的模型');
+        return;
+      }
+      const added = mids.filter((mid) => !discountMids.includes(mid));
+      setDiscountMids([...discountMids, ...added]);
+      message.success(`补齐 ${added.length} 行；原有 ${discountMids.length} 行及其折扣值未改动`);
+    });
+  };
+
   const loadDiscountSchedules = (userId: string) => {
     setSchedLoading(true);
     (request.get(`/users/${userId}/discount-schedules`) as unknown as Promise<{ data: any[] }>)
@@ -465,6 +524,15 @@ const Users: React.FC = () => {
     const md: Record<string, number> = record.model_discounts ? (() => { try { return JSON.parse(record.model_discounts); } catch { return {}; } })() : {};
     setDiscountMap(md);
     setDiscountMids(Object.keys(md));
+    setReachableList([]);
+    setReachableFailed(false);
+    reachableReqRef.current = record.id;
+    if (Object.keys(md).length === 0 && !isAdminPage) {
+      fetchReachableModels(record.id).then(({ mids }) => {
+        // 预置返回前运营已手动加了模型，就不覆盖他的选择
+        setDiscountMids((prev) => (prev.length === 0 ? mids : prev));
+      });
+    }
     // 折扣台账随用户切换先清空再拉，避免看到上一个用户的预约记录
     setDiscountSchedules([]);
     setSchedModel(undefined);
@@ -1330,8 +1398,20 @@ const Users: React.FC = () => {
                           {/* 左侧：已选模型及折扣设置 */}
                           <Col xs={24} md={10}>
                             <div style={{ padding: 16, background: _isLight ? '#f9fafb' : 'rgba(255,255,255,0.04)', borderRadius: 8, minHeight: 300 }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                                <Text strong>已选模型折扣 ({discountMids.length})</Text>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
+                                <Space size={6} wrap>
+                                  <Text strong>已选模型折扣 ({discountMids.length})</Text>
+                                  {presetRowCount > 0 && (
+                                    <Text type="secondary" style={{ fontSize: 12 }}>其中 {presetRowCount} 行按该客户渠道自动预置</Text>
+                                  )}
+                                  {reachableFailed && !reachableLoading && (
+                                    <Text type="danger" style={{ fontSize: 12 }}>预置获取失败，仍可手动选择</Text>
+                                  )}
+                                </Space>
+                                <Space size={6}>
+                                  {reachableLoading && <Spin size="small" />}
+                                  <Button size="small" onClick={handleReapplyPreset}>重新预置</Button>
+                                </Space>
                               </div>
                               {discountMids.length === 0 ? (
                                 <Text type="secondary" style={{ fontSize: 13 }}>从右侧选择模型后设置折扣</Text>
@@ -1341,6 +1421,7 @@ const Users: React.FC = () => {
                                     const model = availableModels.find((m: any) => m.mid === mid);
                                     const discount = discountMap[mid];
                                     const siteDiscount = model?.site_discount_enabled ? model.site_discount : null;
+                                    const reachChans: any[] = reachableByMid[mid]?.channels || [];
                                     return (
                                       <div key={mid} style={{ padding: '8px 12px', background: _isLight ? '#fff' : 'rgba(255,255,255,0.06)', borderRadius: 6, border: _isLight ? '1px solid #e5e4e7' : '1px solid rgba(255,255,255,0.1)' }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
@@ -1350,6 +1431,25 @@ const Users: React.FC = () => {
                                               {model?.remark && <span style={{ color: 'var(--text-secondary)', fontWeight: 'normal', marginLeft: 4, fontSize: 11 }}>({model.remark})</span>}
                                             </div>
                                             <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{model ? model.model_id : ''} · MID: {mid}</div>
+                                            {reachChans.length > 0 && (
+                                              <div style={{ marginTop: 3, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                                                {reachChans.slice(0, 2).map((c: any) => (
+                                                  <Tag
+                                                    key={c.id}
+                                                    color={c.is_ha_group ? 'purple' : c.match === 'level' ? 'blue' : 'default'}
+                                                    title={`${c.name}${c.is_ha_group ? `（组内：${(c.sub_channels || []).map((s: any) => s.name).join('、')}）` : ''} · ${c.match === 'level' ? '按该客户等级授权' : '不限等级的全开放渠道'}`}
+                                                    style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px', maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                                                  >
+                                                    {c.is_ha_group
+                                                      ? `${c.name}: ${(c.sub_channels || []).map((s: any) => s.name).join('/') || '—'}`
+                                                      : c.name}
+                                                  </Tag>
+                                                ))}
+                                                {reachChans.length > 2 && (
+                                                  <Text type="secondary" style={{ fontSize: 10 }}>+{reachChans.length - 2}</Text>
+                                                )}
+                                              </div>
+                                            )}
                                           </div>
                                           <Button
                                             type="text"
