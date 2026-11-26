@@ -6,6 +6,7 @@
  */
 
 pub mod usage_export;
+pub mod usage_xlsx;
 
 use crate::error::AppResult;
 use crate::time_system::DbTs;

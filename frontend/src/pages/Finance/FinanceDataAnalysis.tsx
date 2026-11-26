@@ -156,11 +156,11 @@ const FinanceDataAnalysis: React.FC = () => {
         message.error(json.error || '导出失败');
         return;
       }
-      const blob = resp instanceof Blob ? resp : new Blob([resp], { type: 'text/csv' });
+      const blob = resp instanceof Blob ? resp : new Blob([resp], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `usage_detail_${dayjs().format('YYYYMMDDHHmmss')}.csv`;
+      a.download = `${dayjs().subtract(1, 'day').format('YYYY-MM-DD')}-${dayjs().format('YYYY-MM-DD')} 各用户模型用量明细.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
       message.success('导出成功');
