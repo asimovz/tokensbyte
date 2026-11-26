@@ -230,7 +230,7 @@ const Users: React.FC = () => {
   const [discountMap, setDiscountMap] = useState<Record<string, number>>({});
   /** 已选用于设置折扣的模型 mid 列表 */
   const [discountMids, setDiscountMids] = useState<string[]>([]);
-  /** 该客户按其等级在启用渠道里实际能命中的模型行（与计费选渠同源，只读）；预置清单与渠道标签都用它 */
+  /** 该客户按其等级在启用渠道里实际能命中的模型行（与计费选渠同源，只读）；渠道标签用它，预置只取 channels 中含 match=level 的行 */
   const [reachableList, setReachableList] = useState<any[]>([]);
   const [reachableLoading, setReachableLoading] = useState(false);
   const [reachableFailed, setReachableFailed] = useState(false);
@@ -242,7 +242,7 @@ const Users: React.FC = () => {
     return map;
   }, [reachableList]);
   const presetRowCount = useMemo(
-    () => discountMids.filter((mid) => !!reachableByMid[mid]).length,
+    () => discountMids.filter((mid) => reachableByMid[mid]?.channels?.some((ch: any) => ch.match === 'level')).length,
     [discountMids, reachableByMid],
   );
   // ── 折扣预约（口径 v2：首次即时、修改走预约）；本列表兼折扣变更台账 ──
@@ -398,9 +398,9 @@ const Users: React.FC = () => {
   };
 
   // ── 折扣预约：列表加载 / 提交 / 取消 ──
-  /** 取「该客户可命中的模型行」。判据全在后端 `/users/{id}/models`：
-   *  启用渠道 + 等级双键（user_group 与等级 ID 两种历史写法都认）+ exclude 命中即排除 + 模型 is_active=1，
-   *  不看额度耗尽 / 熔断 / 预设禁用——面板要反映「给它开了什么」，不能因为渠道今早熔断就少一行。 */
+  /** 接口取「该客户可命中的模型行」用于渠道标签；预置只取 channels 中含 match=level（显式绑定该等级）的行。
+   *  判据全在后端 `/users/{id}/models`：启用渠道 + 等级双键（user_group 与等级 ID 两种历史写法都认）
+   *  + exclude 命中即排除 + 模型 is_active=1，不看额度耗尽 / 熔断 / 预设禁用。 */
   const fetchReachableModels = (userId: string): Promise<{ mids: string[]; failed: boolean }> => {
     setReachableLoading(true);
     setReachableFailed(false);
@@ -409,7 +409,8 @@ const Users: React.FC = () => {
         if (reachableReqRef.current !== userId) return { mids: [], failed: false };
         const list = res?.data || [];
         setReachableList(list);
-        return { mids: list.map((it: any) => String(it.mid)), failed: false };
+        const levelRows = list.filter((it: any) => it.channels?.some((ch: any) => ch.match === 'level'));
+        return { mids: levelRows.map((it: any) => String(it.mid)), failed: false };
       })
       .catch(() => {
         if (reachableReqRef.current === userId) setReachableFailed(true);
@@ -430,7 +431,7 @@ const Users: React.FC = () => {
         return;
       }
       if (mids.length === 0) {
-        message.info('该客户等级在启用渠道里没有可命中的模型');
+        message.info('该客户等级没有显式绑定的模型');
         return;
       }
       const added = mids.filter((mid) => !discountMids.includes(mid));
@@ -1402,7 +1403,7 @@ const Users: React.FC = () => {
                                 <Space size={6} wrap>
                                   <Text strong>已选模型折扣 ({discountMids.length})</Text>
                                   {presetRowCount > 0 && (
-                                    <Text type="secondary" style={{ fontSize: 12 }}>其中 {presetRowCount} 行按该客户渠道自动预置</Text>
+                                    <Text type="secondary" style={{ fontSize: 12 }}>其中 {presetRowCount} 行按该客户等级绑定渠道自动预置</Text>
                                   )}
                                   {reachableFailed && !reachableLoading && (
                                     <Text type="danger" style={{ fontSize: 12 }}>预置获取失败，仍可手动选择</Text>
