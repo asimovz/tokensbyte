@@ -37,6 +37,13 @@ fn build_task_log_where(claims: &auth::Claims, query: &TaskLogQuery) -> (String,
         binds.push(uid.clone());
     }
 
+    if let Some(ref group) = query.user_group {
+        if !group.is_empty() {
+            where_clause.push_str(" AND EXISTS (SELECT 1 FROM users xu WHERE xu.id = l.user_id AND xu.user_group = ?)");
+            binds.push(group.clone());
+        }
+    }
+
     if let Some(ref at) = query.action_type {
         match at.as_str() {
             "chat" => where_clause.push_str(" AND l.action_type = '聊天'"),

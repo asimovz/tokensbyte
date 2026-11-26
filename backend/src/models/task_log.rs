@@ -108,6 +108,7 @@ pub struct TaskLogQuery {
     pub page: Option<i64>,
     pub per_page: Option<i64>,
     pub user_id: Option<String>,
+    pub user_group: Option<String>,
     /// 类型筛选: chat / image / video
     pub action_type: Option<String>,
     pub model: Option<String>,
