@@ -1,10 +1,10 @@
-7275df853103fe25718d7baf90a4f93bfde26c137275df8DESKTOP-83QIDS3\asimovz2026-10-17 00:00:36feat(logs,users): 时间筛选到时分/日志导出开放/全部错误 + 昵称选填与管理员权限收口
-622808b3df49b79346e44faf25a235bdcd276438622808basimovz2026-10-13 16:38:03Merge hotfix/custom-20260930: 模型折扣输入支持3位小数
-cf2f23dd306d2612f63f60b946cda4396343c26bcf2f23dasimovz2026-10-13 16:28:38fix(users): 模型折扣输入支持3位小数(precision=3/step=0.01/百分比预览1位)
-d6c6bc805b57d6ededc98ae9735c778210aedf49d6c6bc8DESKTOP-83QIDS3\asimovz2026-10-12 11:53:18feat(asset): 素材请求日志页面 + 用户列显示 username(admin_remark)
-bd928e3c78efafff6dd08eab750396063fb95b0dbd928e3asimovz2026-09-30 02:08:00feat(asset): 素材上游按渠道分组自动推导 (asset_route_by_group)
-6b222c019cff4caf9fda2fcd5dbefe006491d0776b222c0asimovz2026-09-29 05:09:12chore: 预防性忽略调试/测试产物与打包中间物
-a80f3547bc1bce66aa3c3e0f396784307fb256ada80f354asimovz2026-09-29 04:39:18feat(asset): 上游素材绑定支持火山 V4 签名鉴权；素材路由收敛为只认等级映射
-328b5f2bae0277c66b3d268733f5a3687ed20bdc328b5f2asimovz2026-09-04 10:59:42feat(asset): 素材透传路由解耦——用户等级映射 + 默认绑定兜底(四级路由)
-40c7676e851a947965894e20b80d0545866e1e7f40c7676asimovz2026-09-03 15:34:13feat(relay): 上游素材接口协议描述符(asset_api_profile)引擎与配置化适配
-243546c65c2ea6fc049c28de9668a5090cbf7761243546casimovz2026-08-31 19:02:53feat(models): 转发规则组合支持多选挂载
+0a85eb99e3db458d6c599e416c0b705167e0fe7b0a85eb9asimovz2026-11-21 12:47:35feat(用户模型折扣): 面板按客户可命中渠道预置「已选」行
+1afd9d508895855285eba2ebfe634aa9cf4f92e21afd9d5asimovz2026-11-20 16:48:21feat(finance): 财务数据分析页新增「导出用量明细」
+bc2a0cbacf1b21384a5b91996afd796c37945906bc2a0cbasimovz2026-11-20 15:17:25feat(admin-login): 管理员登录页改为 tokens-box 浅色风格
+9975e12caa960f6f9499e691078269297994a61e9975e12asimovz2026-11-20 11:38:14fix(maintenance): 咨询锁 SQL 走 format_query，占位符改 $n 并暴露加锁失败
+6079a54bd9ef46c26137871fa87eab0f6e7103196079a54asimovz2026-11-19 16:13:11test(billing): 补生产账单回放夹具（58 条存量金额逐分一致）
+ca69960923c79acdc9b8b9be63bb8b5c2062810cca69960asimovz2026-11-19 15:23:03docs(changelog): 补客户模型折扣预约生效记录
+f9595e30db421e303461ad62ac324311600e36f8f9595e3asimovz2026-11-19 15:15:22feat(discount): 客户模型折扣支持预约生效（站点时区次日 0 点应用）
+c176378418ef60c43492dc1f5f50c364a957f68dc176378asimovz2026-11-17 15:25:01refactor(asset-binding): 移除上游素材绑定连通性测试接口
+a027f1c369a34f76456bde9b127447522bda3bcea027f1casimovz2026-11-17 14:48:04fix(asset-bindings-ui): 上游素材绑定列表去掉「测试」按钮与「上游素材组」列
+9ca6c9a7e14d62466c328dde243e16821f7265e59ca6c9aasimovz2026-11-17 14:09:12fix(relay): 上游 413/415 直接返回客户，不再切换备用渠道也不熔断
