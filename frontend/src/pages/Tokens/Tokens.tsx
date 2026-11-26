@@ -6,7 +6,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { Table, Button, Space, Tag, Modal, Form, Input, InputNumber, message, Popconfirm, Card, Typography, Tooltip, Row, Col, Grid, theme, Spin, Dropdown, Progress, Checkbox, Select } from 'antd';
+import { Table, Button, Space, Tag, Modal, Form, Input, InputNumber, message, Popconfirm, Card, Typography, Tooltip, Row, Col, Grid, theme, Spin, Dropdown, Progress, Select } from 'antd';
 import AppSwitch from '../../components/AppSwitch';
 import MobileCardList, { MobileCard, CardRow, CardActions } from '../../components/MobileCardList';
 import { PlusOutlined, EditOutlined, DeleteOutlined, CopyOutlined, SyncOutlined, EyeOutlined, EyeInvisibleOutlined, KeyOutlined, CheckOutlined, ArrowLeftOutlined, DollarOutlined, BarChartOutlined, EllipsisOutlined, PieChartOutlined, InfoCircleOutlined, FileTextOutlined, ClearOutlined } from '@ant-design/icons';
@@ -55,11 +55,6 @@ const Tokens: React.FC = () => {
   const [ipFilterEnabled, setIpFilterEnabled] = useState(false);
   const [copiedId, setCopiedId] = useState<number | null>(null);
 
-  // 高可用通道确认弹窗状态
-  const [isHAConfirmModalOpen, setIsHAConfirmModalOpen] = useState(false);
-  const [haConfirmDismiss, setHaConfirmDismiss] = useState(false);
-  const [tempValues, setTempValues] = useState<any>(null);
-
   const sectionContainerStyle: React.CSSProperties = {
     marginBottom: '16px',
     padding: 0,
@@ -90,6 +85,12 @@ const Tokens: React.FC = () => {
   const [revealingTokenId, setRevealingTokenId] = useState<number | null>(null);
   const [revealedKeys, setRevealedKeys] = useState<Record<number, string>>({});
   const [revealLoading, setRevealLoading] = useState(false);
+  const [createdKeyModalOpen, setCreatedKeyModalOpen] = useState(false);
+  const [createdTokenKey, setCreatedTokenKey] = useState('');
+  const closeCreatedKeyModal = () => {
+    setCreatedKeyModalOpen(false);
+    setCreatedTokenKey('');
+  };
 
   // 令牌额度使用详情弹窗状态
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
@@ -289,7 +290,7 @@ const Tokens: React.FC = () => {
     }
   };
 
-  const executeSave = async (formValues: any, shouldDismissHA: boolean) => {
+  const executeSave = async (formValues: any) => {
     const data = {
       ...formValues,
       quota_limit: (formValues.quota_limit === undefined || formValues.quota_limit === null) ? -1 : formValues.quota_limit,
@@ -314,31 +315,19 @@ const Tokens: React.FC = () => {
       const res = editingToken
         ? await (request as any).put(`/tokens/${editingToken.id}`, data, { skipErrorHandler: true })
         : await (request as any).post('/tokens', data, { skipErrorHandler: true });
-      if (shouldDismissHA) {
-        const tokenId = editingToken?.id ?? res?.id;
-        if (tokenId) localStorage.setItem(`ha_confirm_dismiss_${tokenId}`, 'true');
-      }
       message.success(t('common.success'));
       setIsModalVisible(false);
       fetchTokens();
+      if (!editingToken && typeof res?.token_key === 'string' && res.token_key) {
+        setCreatedTokenKey(res.token_key);
+        setCreatedKeyModalOpen(true);
+      }
     } catch (e: any) {
       const serverMsg = e?.response?.data?.error?.message || e?.message || t('tokens.create_failed', '创建失败');
       setIsModalVisible(false);
       message.error(serverMsg);
     } finally {
       setSaving(false);
-    }
-  };
-
-  const handleSave = async (values: { allowed_models?: string[]; allowed_ips?: string; [key: string]: unknown }) => {
-    const isDismissed = editingToken && localStorage.getItem(`ha_confirm_dismiss_${editingToken.id}`) === 'true';
-
-    if (values.high_availability && !isDismissed) {
-      setTempValues(values);
-      setHaConfirmDismiss(false);
-      setIsHAConfirmModalOpen(true);
-    } else {
-      executeSave(values, false);
     }
   };
 
@@ -978,7 +967,7 @@ const Tokens: React.FC = () => {
               </Text>
             </div>
 
-            <Form form={form} layout="vertical" onFinish={handleSave} onFinishFailed={() => setSaving(false)}>
+            <Form form={form} layout="vertical" onFinish={executeSave} onFinishFailed={() => setSaving(false)}>
               
               {/* 区块一：基础配置 */}
               <div style={sectionContainerStyle}>
@@ -1417,6 +1406,48 @@ const Tokens: React.FC = () => {
         </Form>
       </Modal>
 
+      {/* 新建成功后展示完整密钥：列表只有脱敏值，关掉后要看就得走密码验证 */}
+      <Modal
+        title={t('tokens.save_api_key_title', '保存你的 API Key')}
+        open={createdKeyModalOpen}
+        onCancel={closeCreatedKeyModal}
+        footer={
+          <Button type="primary" onClick={closeCreatedKeyModal}>
+            {t('tokens.i_saved', '我已保存')}
+          </Button>
+        }
+        destroyOnHidden
+        width={560}
+      >
+        <div style={{ fontSize: 13, lineHeight: 1.8, marginBottom: 16 }}>
+          {t('tokens.save_api_key_desc_prefix', '请复制并妥善保存此 API Key，')}
+          <strong>{t('tokens.save_api_key_desc_bold', '仅在创建时可见可复制')}</strong>
+          {t('tokens.save_api_key_desc_suffix', '，请勿泄露给他人。列表中仅显示脱敏值。')}
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            padding: '12px 14px',
+            borderRadius: 8,
+            border: `1px solid ${themeToken.colorBorderSecondary}`,
+            background: themeToken.colorFillQuaternary,
+          }}
+        >
+          <Text style={{ flex: 1, fontFamily: 'monospace', fontSize: 13, lineHeight: 1.8, wordBreak: 'break-all', userSelect: 'all' }}>
+            {createdTokenKey}
+          </Text>
+          <Tooltip title={copiedId === -1 ? t('tokens.copied', '已复制!') : t('tokens.copy_hint')}>
+            <Button
+              type="text"
+              icon={copiedId === -1 ? <CheckOutlined style={{ color: themeToken.colorText }} /> : <CopyOutlined />}
+              onClick={() => handleCopy(createdTokenKey, -1)}
+            />
+          </Tooltip>
+        </div>
+      </Modal>
+
       {/* 额度使用详情弹窗 */}
       <Modal
         title={
@@ -1574,32 +1605,6 @@ const Tokens: React.FC = () => {
         </div>
       </Modal>
 
-      {/* 开启高可用通道确认弹窗 */}
-      <Modal
-        title={t('tokens.ha_confirm_title')}
-        open={isHAConfirmModalOpen}
-        onCancel={() => {
-          setIsHAConfirmModalOpen(false);
-          setSaving(false);
-        }}
-        onOk={() => {
-          setIsHAConfirmModalOpen(false);
-          executeSave(tempValues, haConfirmDismiss);
-        }}
-        okText={t('common.confirm')}
-        cancelText={t('common.cancel')}
-      >
-        <div style={{ marginTop: '12px' }}>
-          <p style={{ margin: 0, lineHeight: '1.6', fontSize: '14px', color: isLight ? '#3f3f46' : '#d4d4d8' }}>
-            {t('tokens.ha_confirm_body')}
-          </p>
-          <div style={{ marginTop: '16px' }}>
-            <Checkbox checked={haConfirmDismiss} onChange={(e) => setHaConfirmDismiss(e.target.checked)}>
-              {t('tokens.ha_confirm_dont_ask')}
-            </Checkbox>
-          </div>
-        </div>
-      </Modal>
     </Card>
   );
 };
