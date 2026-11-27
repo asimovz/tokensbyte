@@ -116,7 +116,12 @@ pub async fn gemini_proxy(
 
         // 模型映射：仅图片类走分辨率档；聊天等跳过 body 解析
         let (resolved_model, mapping_source) = if resolved_cat.contains("图片") {
-            super::router::resolve_model_body(&channel, model, db_model.as_ref(), body_json.as_ref())
+            super::router::resolve_model_body(
+                &channel,
+                model,
+                db_model.as_ref(),
+                body_json.as_ref(),
+            )
         } else {
             super::router::resolve_model(&channel, model, db_model.as_ref(), None)
         };
@@ -411,10 +416,8 @@ const ARK_ASSET_ACTIONS: &[&str] = &[
 ];
 
 // 透传分支专属：非素材类、原样转发到上游的动作（不做归属校验/记录，商业签名分支不识别）
-const ARK_PASSTHROUGH_EXTRA_ACTIONS: &[&str] = &[
-    "CreateVisualValidateSession",
-    "GetVisualValidateResult",
-];
+const ARK_PASSTHROUGH_EXTRA_ACTIONS: &[&str] =
+    &["CreateVisualValidateSession", "GetVisualValidateResult"];
 
 // 以下隔离辅助函数为纯 DB/JSON 逻辑，同时服务于商业分支与上游素材透传分支，解除门控（逻辑零改动）
 /// 加载当前用户在本插件命名空间下拥有的 Ark 资源 ID 集合
@@ -516,50 +519,97 @@ async fn ensure_ark_owned_or_claim(
     user_id: &str,
     plugin_ns: &str,
 ) -> AppResult<()> {
-    let (owned_sql, any_sql, claim_sql, forbidden_msg) = match kind {
-        "asset" => (
-            "SELECT COUNT(*) FROM plugin_assets WHERE asset_id = ? AND user_id = ? AND plugin_ns = ?",
-            "SELECT COUNT(*) FROM plugin_assets WHERE asset_id = ? AND plugin_ns = ?",
-            "INSERT INTO plugin_assets (user_id, asset_type, source, status, file_name, file_url, asset_id, category, plugin_ns) \
-             VALUES (?, 'unknown', 'api_proxy', 'approved', 'unknown', '', ?, 'API素材', ?)",
-            "无权操作此素材，仅可操作自己创建的素材",
-        ),
-        _ => (
-            "SELECT COUNT(*) FROM plugin_asset_groups WHERE group_id = ? AND user_id = ? AND plugin_ns = ?",
-            "SELECT COUNT(*) FROM plugin_asset_groups WHERE group_id = ? AND plugin_ns = ?",
-            "INSERT INTO plugin_asset_groups (user_id, group_id, name, plugin_ns) VALUES (?, ?, '历史数据', ?)",
-            "无权操作此素材组，仅可操作自己创建的素材组",
-        ),
-    };
-
-    let owned: i64 = sqlx::query_scalar(&state.db.format_query(owned_sql))
-        .bind(id)
-        .bind(user_id)
-        .bind(plugin_ns)
-        .fetch_one(&state.db.pool)
-        .await
-        .unwrap_or(0);
-    if owned > 0 {
-        return Ok(());
+    match kind {
+        "asset" => record_ark_asset(&state.db, user_id, "unknown", "", id, plugin_ns).await,
+        _ => record_ark_asset_group(&state.db, user_id, id, "历史数据", None, plugin_ns).await,
     }
+}
 
-    let any_exists: i64 = sqlx::query_scalar(&state.db.format_query(any_sql))
-        .bind(id)
-        .bind(plugin_ns)
-        .fetch_one(&state.db.pool)
-        .await
-        .unwrap_or(0);
-    if any_exists > 0 {
-        return Err(AppError::Forbidden(forbidden_msg.into()));
+async fn record_ark_asset(
+    db: &crate::db::Database,
+    user_id: &str,
+    asset_type: &str,
+    file_url: &str,
+    asset_id: &str,
+    plugin_ns: &str,
+) -> AppResult<()> {
+    if asset_id.is_empty() {
+        return Err(AppError::Internal("上游创建素材成功但未返回素材 ID".into()));
     }
+    let file_name = file_url.rsplit('/').next().unwrap_or("unknown").to_string();
+    sqlx::query(&db.format_query(
+        "INSERT INTO plugin_assets (user_id, asset_type, source, status, file_name, file_url, asset_id, category, plugin_ns) \
+         VALUES (?, ?, 'api_proxy', 'approved', ?, ?, ?, 'API素材', ?) \
+         ON CONFLICT (plugin_ns, asset_id) DO NOTHING"
+    ))
+    .bind(user_id)
+    .bind(asset_type)
+    .bind(&file_name)
+    .bind(file_url)
+    .bind(asset_id)
+    .bind(plugin_ns)
+    .execute(&db.pool)
+    .await
+    .map_err(|e| AppError::Internal(format!("写入素材归属失败: {e}")))?;
 
-    let _ = sqlx::query(&state.db.format_query(claim_sql))
-        .bind(user_id)
-        .bind(id)
-        .bind(plugin_ns)
-        .execute(&state.db.pool)
-        .await;
-    Ok(())
+    let owner: Option<String> = sqlx::query_scalar(
+        &db.format_query("SELECT user_id FROM plugin_assets WHERE asset_id = ? AND plugin_ns = ?"),
+    )
+    .bind(asset_id)
+    .bind(plugin_ns)
+    .fetch_optional(&db.pool)
+    .await
+    .map_err(|e| AppError::Internal(format!("查询素材归属失败: {e}")))?;
+    match owner.as_deref() {
+        Some(owner) if owner == user_id => Ok(()),
+        Some(_) => Err(AppError::Forbidden(
+            "无权操作此素材，仅可操作自己创建的素材".into(),
+        )),
+        None => Err(AppError::Internal("素材归属写入后未查询到记录".into())),
+    }
+}
+
+async fn record_ark_asset_group(
+    db: &crate::db::Database,
+    user_id: &str,
+    group_id: &str,
+    name: &str,
+    description: Option<&str>,
+    plugin_ns: &str,
+) -> AppResult<()> {
+    if group_id.is_empty() {
+        return Err(AppError::Internal(
+            "上游创建素材组成功但未返回素材组 ID".into(),
+        ));
+    }
+    sqlx::query(&db.format_query(
+        "INSERT INTO plugin_asset_groups (user_id, group_id, name, description, plugin_ns) \
+         VALUES (?, ?, ?, ?, ?) ON CONFLICT (plugin_ns, group_id) DO NOTHING",
+    ))
+    .bind(user_id)
+    .bind(group_id)
+    .bind(name)
+    .bind(description)
+    .bind(plugin_ns)
+    .execute(&db.pool)
+    .await
+    .map_err(|e| AppError::Internal(format!("写入素材组归属失败: {e}")))?;
+
+    let owner: Option<String> = sqlx::query_scalar(&db.format_query(
+        "SELECT user_id FROM plugin_asset_groups WHERE group_id = ? AND plugin_ns = ?",
+    ))
+    .bind(group_id)
+    .bind(plugin_ns)
+    .fetch_optional(&db.pool)
+    .await
+    .map_err(|e| AppError::Internal(format!("查询素材组归属失败: {e}")))?;
+    match owner.as_deref() {
+        Some(owner) if owner == user_id => Ok(()),
+        Some(_) => Err(AppError::Forbidden(
+            "无权操作此素材组，仅可操作自己创建的素材组".into(),
+        )),
+        None => Err(AppError::Internal("素材组归属写入后未查询到记录".into())),
+    }
 }
 
 /// 等级 → 绑定 精确映射（绑定与其上游凭证均须启用）。开关关闭时是唯一路由依据；
@@ -598,10 +648,7 @@ async fn level_binding_id(state: &AppState, lid: i64) -> Result<Option<i64>, App
 ///   `ORDER BY id LIMIT 1` 使同渠道多绑定只命中最小 id、无绑定渠道会被自动
 ///   INSERT 出一条绑定（可能给纯文本 LLM 网关凭空造出素材上游）。
 ///   本次重新引入 channels 是把它当**推导键**（凭证同源）而非兜底排序，语义不同。
-async fn resolve_asset_binding(
-    state: &AppState,
-    user_id: &str,
-) -> Result<Option<i64>, AppError> {
+async fn resolve_asset_binding(state: &AppState, user_id: &str) -> Result<Option<i64>, AppError> {
     #[derive(sqlx::FromRow)]
     struct UserGroupRow {
         user_group: String,
@@ -971,43 +1018,37 @@ pub async fn ark_asset_proxy(
 
                 let res_bytes = serde_json::to_vec(&res).unwrap_or_default();
 
-                // 后置处理：Create 写入本地归属记录 / Delete 清理本地记录（异步不阻塞响应）
+                // Create 必须同步落本地归属，否则上游成功后列表仍可能为空。
                 match action.as_str() {
                     "CreateAsset" => {
-                        if let Some(aid) = res.pointer("/Result/Id").and_then(|v| v.as_str()) {
-                            let s = state.clone();
-                            let uid = token.user_id.clone();
-                            let aid = aid.to_string();
-                            let at = body_asset_type.unwrap_or_else(|| "image".to_string());
-                            let url = body_url.unwrap_or_default();
-                            let ns = plugin_ns.to_string();
-                            tokio::spawn(async move {
-                                let fname = url.rsplit('/').next().unwrap_or("unknown").to_string();
-                                let _ = sqlx::query(&s.db.format_query(
-                                "INSERT INTO plugin_assets (user_id, asset_type, source, status, file_name, file_url, asset_id, category, plugin_ns) \
-                                 VALUES (?, ?, 'api_proxy', 'approved', ?, ?, ?, 'API素材', ?)"
-                            ))
-                            .bind(&uid).bind(&at).bind(&fname).bind(&url).bind(&aid).bind(&ns)
-                            .execute(&s.db.pool).await;
-                            });
-                        }
+                        let aid = res
+                            .pointer("/Result/Id")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| {
+                                AppError::Internal("上游创建素材成功但未返回素材 ID".into())
+                            })?;
+                        let at = body_asset_type.unwrap_or_else(|| "image".to_string());
+                        let url = body_url.unwrap_or_default();
+                        record_ark_asset(&state.db, &token.user_id, &at, &url, aid, plugin_ns)
+                            .await?;
                     }
                     "CreateAssetGroup" => {
-                        if let Some(gid) = res.pointer("/Result/Id").and_then(|v| v.as_str()) {
-                            let s = state.clone();
-                            let uid = token.user_id.clone();
-                            let gid = gid.to_string();
-                            let name = body_name.unwrap_or_else(|| "未命名".to_string());
-                            let desc = body_desc;
-                            let ns = plugin_ns.to_string();
-                            tokio::spawn(async move {
-                                let _ = sqlx::query(&s.db.format_query(
-                                "INSERT INTO plugin_asset_groups (user_id, group_id, name, description, plugin_ns) VALUES (?, ?, ?, ?, ?)"
-                            ))
-                            .bind(&uid).bind(&gid).bind(&name).bind(&desc).bind(&ns)
-                            .execute(&s.db.pool).await;
-                            });
-                        }
+                        let gid = res
+                            .pointer("/Result/Id")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| {
+                                AppError::Internal("上游创建素材组成功但未返回素材组 ID".into())
+                            })?;
+                        let name = body_name.unwrap_or_else(|| "未命名".to_string());
+                        record_ark_asset_group(
+                            &state.db,
+                            &token.user_id,
+                            gid,
+                            &name,
+                            body_desc.as_deref(),
+                            plugin_ns,
+                        )
+                        .await?;
                     }
                     "DeleteAsset" => {
                         if let Some(ref id) = body_id {
@@ -1211,16 +1252,14 @@ async fn ark_asset_upstream_passthrough(
                 let id = body_id
                     .as_deref()
                     .ok_or_else(|| AppError::BadRequest("缺少必需参数 Id".into()))?;
-                ensure_ark_owned_or_claim(state, "group", id, &token.user_id, &plugin_ns)
-                    .await?;
+                ensure_ark_owned_or_claim(state, "group", id, &token.user_id, &plugin_ns).await?;
             }
             "CreateAsset" => {
                 // 只能写入自己拥有的素材组
                 let gid = body_group_id
                     .as_deref()
                     .ok_or_else(|| AppError::BadRequest("缺少必需参数 GroupId".into()))?;
-                ensure_ark_owned_or_claim(state, "group", gid, &token.user_id, &plugin_ns)
-                    .await?;
+                ensure_ark_owned_or_claim(state, "group", gid, &token.user_id, &plugin_ns).await?;
             }
             "ListAssets" => {
                 let owned_assets = load_owned_ark_ids(
@@ -1346,43 +1385,32 @@ async fn ark_asset_upstream_passthrough(
 
     let res_bytes = serde_json::to_vec(&res).unwrap_or_default();
 
-    // 后置处理：Create 写入本地归属记录 / Delete 清理本地记录（异步不阻塞响应）
+    // Create 必须同步落本地归属，否则上游成功后列表仍可能为空。
     match action.as_str() {
         "CreateAsset" => {
-            if let Some(aid) = res.pointer("/Result/Id").and_then(|v| v.as_str()) {
-                let s = state.clone();
-                let uid = token.user_id.clone();
-                let aid = aid.to_string();
-                let at = body_asset_type.unwrap_or_else(|| "image".to_string());
-                let url = body_url.unwrap_or_default();
-                let ns = plugin_ns.clone();
-                tokio::spawn(async move {
-                    let fname = url.rsplit('/').next().unwrap_or("unknown").to_string();
-                    let _ = sqlx::query(&s.db.format_query(
-                        "INSERT INTO plugin_assets (user_id, asset_type, source, status, file_name, file_url, asset_id, category, plugin_ns) \
-                         VALUES (?, ?, 'api_proxy', 'approved', ?, ?, ?, 'API素材', ?)"
-                    ))
-                    .bind(&uid).bind(&at).bind(&fname).bind(&url).bind(&aid).bind(&ns)
-                    .execute(&s.db.pool).await;
-                });
-            }
+            let aid = res
+                .pointer("/Result/Id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AppError::Internal("上游创建素材成功但未返回素材 ID".into()))?;
+            let at = body_asset_type.unwrap_or_else(|| "image".to_string());
+            let url = body_url.unwrap_or_default();
+            record_ark_asset(&state.db, &token.user_id, &at, &url, aid, &plugin_ns).await?;
         }
         "CreateAssetGroup" => {
-            if let Some(gid) = res.pointer("/Result/Id").and_then(|v| v.as_str()) {
-                let s = state.clone();
-                let uid = token.user_id.clone();
-                let gid = gid.to_string();
-                let name = body_name.unwrap_or_else(|| "未命名".to_string());
-                let desc = body_desc;
-                let ns = plugin_ns.clone();
-                tokio::spawn(async move {
-                    let _ = sqlx::query(&s.db.format_query(
-                        "INSERT INTO plugin_asset_groups (user_id, group_id, name, description, plugin_ns) VALUES (?, ?, ?, ?, ?)"
-                    ))
-                    .bind(&uid).bind(&gid).bind(&name).bind(&desc).bind(&ns)
-                    .execute(&s.db.pool).await;
-                });
-            }
+            let gid = res
+                .pointer("/Result/Id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AppError::Internal("上游创建素材组成功但未返回素材组 ID".into()))?;
+            let name = body_name.unwrap_or_else(|| "未命名".to_string());
+            record_ark_asset_group(
+                &state.db,
+                &token.user_id,
+                gid,
+                &name,
+                body_desc.as_deref(),
+                &plugin_ns,
+            )
+            .await?;
         }
         "DeleteAsset" => {
             if let Some(ref id) = body_id {
@@ -1429,7 +1457,8 @@ async fn ark_asset_upstream_passthrough(
                     let ns = plugin_ns.clone();
                     tokio::spawn(async move {
                         let _ = sqlx::query(&s.db.format_query(
-                            "INSERT INTO plugin_asset_groups (user_id, group_id, name, plugin_ns) VALUES (?, ?, '真人认证组', ?)"
+                            "INSERT INTO plugin_asset_groups (user_id, group_id, name, plugin_ns) VALUES (?, ?, '真人认证组', ?) \
+                             ON CONFLICT (plugin_ns, group_id) DO NOTHING"
                         ))
                         .bind(&uid).bind(&gid).bind(&ns)
                         .execute(&s.db.pool).await;
@@ -1699,4 +1728,182 @@ pub async fn volcengine_task_list(
         &upstream_hdrs,
         body,
     ))
+}
+
+#[cfg(test)]
+mod ark_asset_namespace_tests {
+    use super::{record_ark_asset, record_ark_asset_group};
+    use crate::db::Database;
+    use sqlx::postgres::PgPoolOptions;
+
+    #[tokio::test]
+    #[ignore = "requires TOKENBYTE_TEST_DATABASE_URL; creates and drops an isolated schema"]
+    async fn asset_ids_are_unique_only_within_upstream_namespace() {
+        let url = std::env::var("TOKENBYTE_TEST_DATABASE_URL")
+            .expect("TOKENBYTE_TEST_DATABASE_URL must point to a test database");
+        let schema = format!("tb_asset_test_{}", uuid::Uuid::new_v4().simple());
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(8)
+            .after_connect({
+                let schema = schema.clone();
+                move |conn, _| {
+                    let sql = format!("SET search_path TO {schema}");
+                    Box::pin(async move {
+                        sqlx::query(&sql).execute(conn).await?;
+                        Ok(())
+                    })
+                }
+            })
+            .connect(&url)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE plugin_assets (
+                user_id TEXT NOT NULL, asset_type TEXT NOT NULL, source TEXT NOT NULL,
+                status TEXT NOT NULL, file_name TEXT NOT NULL, file_url TEXT NOT NULL,
+                asset_id TEXT, category TEXT NOT NULL, plugin_ns TEXT NOT NULL,
+                UNIQUE (plugin_ns, asset_id)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE plugin_asset_groups (
+                user_id TEXT NOT NULL, group_id TEXT NOT NULL, name TEXT NOT NULL,
+                description TEXT, plugin_ns TEXT NOT NULL,
+                UNIQUE (plugin_ns, group_id)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let db = Database { pool };
+
+        record_ark_asset(
+            &db,
+            "user-a",
+            "image",
+            "https://example.test/a.png",
+            "same-id",
+            "uar:9",
+        )
+        .await
+        .unwrap();
+        record_ark_asset(
+            &db,
+            "user-b",
+            "image",
+            "https://example.test/b.png",
+            "same-id",
+            "uar:13",
+        )
+        .await
+        .unwrap();
+        record_ark_asset(&db, "user-a", "image", "", "same-id", "uar:9")
+            .await
+            .unwrap();
+        assert!(matches!(
+            record_ark_asset(&db, "user-b", "image", "", "same-id", "uar:9").await,
+            Err(crate::error::AppError::Forbidden(_))
+        ));
+        assert!(record_ark_asset(&db, "user-a", "image", "", "", "uar:9")
+            .await
+            .is_err());
+
+        record_ark_asset_group(&db, "user-a", "same-group", "A", None, "uar:9")
+            .await
+            .unwrap();
+        record_ark_asset_group(&db, "user-b", "same-group", "B", None, "uar:13")
+            .await
+            .unwrap();
+        assert!(matches!(
+            record_ark_asset_group(&db, "user-b", "same-group", "B", None, "uar:9").await,
+            Err(crate::error::AppError::Forbidden(_))
+        ));
+
+        let mut tasks = Vec::new();
+        for n in 0..8 {
+            let db = db.clone();
+            tasks.push(tokio::spawn(async move {
+                record_ark_asset_group(
+                    &db,
+                    &format!("user-{n}"),
+                    "race-group",
+                    "race",
+                    None,
+                    "uar:9",
+                )
+                .await
+            }));
+        }
+        let mut successes = 0;
+        for task in tasks {
+            if task.await.unwrap().is_ok() {
+                successes += 1;
+            }
+        }
+        assert_eq!(successes, 1);
+        let owners: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM plugin_asset_groups WHERE group_id = 'race-group' AND plugin_ns = 'uar:9'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(owners, 1);
+
+        let mut tasks = Vec::new();
+        for n in 0..8 {
+            let db = db.clone();
+            tasks.push(tokio::spawn(async move {
+                record_ark_asset(
+                    &db,
+                    &format!("user-{n}"),
+                    "image",
+                    "",
+                    "race-asset",
+                    "uar:9",
+                )
+                .await
+            }));
+        }
+        let mut successes = 0;
+        for task in tasks {
+            if task.await.unwrap().is_ok() {
+                successes += 1;
+            }
+        }
+        assert_eq!(successes, 1);
+        let owners: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM plugin_assets WHERE asset_id = 'race-asset' AND plugin_ns = 'uar:9'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(owners, 1);
+
+        sqlx::query("DROP TABLE plugin_assets")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        assert!(
+            record_ark_asset(&db, "user-a", "image", "", "db-error", "uar:9")
+                .await
+                .is_err()
+        );
+
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+    }
 }

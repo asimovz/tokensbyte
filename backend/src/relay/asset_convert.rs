@@ -354,9 +354,15 @@ async fn convert_url_resource(
     moderation: bool,
 ) -> Result<(String, bool), String> {
     let meta_fp = fetch_meta_fingerprint(&state.http_client, url).await;
-    if let Some(aid) =
-        lookup_cached_converted_asset(state, url, plugin_ns, "relay_convert", meta_fp.as_deref())
-            .await
+    if let Some(aid) = lookup_cached_converted_asset(
+        state,
+        user_id,
+        url,
+        plugin_ns,
+        "relay_convert",
+        meta_fp.as_deref(),
+    )
+    .await
     {
         tracing::info!("[AssetConvert] 命中缓存，复用素材: {} -> {}", url, aid);
         return Ok((aid, true));
@@ -387,7 +393,7 @@ async fn convert_url_resource(
                 plugin_ns,
                 "relay_convert",
             )
-            .await;
+            .await?;
             tracing::info!("[AssetConvert] 新素材注册成功: {} -> {}", url, aid);
             Ok((aid, false))
         }
@@ -462,7 +468,7 @@ where
         plugin_ns,
         source,
     )
-    .await;
+    .await?;
     tracing::info!(
         "[AssetConvert] base64 素材注册成功: base64_{}.{} -> {}",
         &content_hash[..8],
@@ -623,15 +629,17 @@ async fn fetch_meta_fingerprint(http_client: &reqwest::Client, url: &str) -> Opt
 
 async fn query_by_fingerprint_with_source(
     state: &AppState,
+    user_id: &str,
     fingerprint: &str,
     plugin_ns: &str,
     source: &str,
 ) -> Option<String> {
     sqlx::query_as::<_, (String,)>(
         &state.db.format_query(
-            "SELECT asset_id FROM plugin_assets WHERE meta_fingerprint = ? AND source = ? AND asset_id IS NOT NULL AND plugin_ns = ? LIMIT 1"
+            "SELECT asset_id FROM plugin_assets WHERE user_id = ? AND meta_fingerprint = ? AND source = ? AND asset_id IS NOT NULL AND plugin_ns = ? LIMIT 1"
         )
     )
+    .bind(user_id)
     .bind(fingerprint)
     .bind(source)
     .bind(plugin_ns)
@@ -645,14 +653,16 @@ async fn query_by_fingerprint_with_source(
 /// 基于 file_url 查询已有素材 ID（仅指纹不可用时的 L2 兜底）
 async fn query_by_url_with_source(
     state: &AppState,
+    user_id: &str,
     url: &str,
     plugin_ns: &str,
     source: &str,
 ) -> Option<String> {
     sqlx::query_as::<_, (String,)>(&state.db.format_query(
         "SELECT asset_id FROM plugin_assets \
-             WHERE file_url = ? AND source = ? AND asset_id IS NOT NULL AND plugin_ns = ? LIMIT 1",
+             WHERE user_id = ? AND file_url = ? AND source = ? AND asset_id IS NOT NULL AND plugin_ns = ? LIMIT 1",
     ))
+    .bind(user_id)
     .bind(url)
     .bind(source)
     .bind(plugin_ns)
@@ -667,13 +677,16 @@ async fn query_by_url_with_source(
 /// 仅指纹算不出时才走 L2 URL。
 async fn lookup_cached_converted_asset(
     state: &AppState,
+    user_id: &str,
     url: &str,
     plugin_ns: &str,
     source: &str,
     meta_fp: Option<&str>,
 ) -> Option<String> {
     if let Some(fp) = meta_fp {
-        if let Some(aid) = query_by_fingerprint_with_source(state, fp, plugin_ns, source).await {
+        if let Some(aid) =
+            query_by_fingerprint_with_source(state, user_id, fp, plugin_ns, source).await
+        {
             return Some(aid);
         }
         tracing::info!(
@@ -683,7 +696,7 @@ async fn lookup_cached_converted_asset(
         return None;
     }
 
-    query_by_url_with_source(state, url, plugin_ns, source).await
+    query_by_url_with_source(state, user_id, url, plugin_ns, source).await
 }
 
 /// 解码 base64：支持 `data:*;base64,...` 与纯 base64；返回 (字节, 扩展名)
@@ -778,13 +791,14 @@ async fn insert_asset_record_with_source(
     meta_fingerprint: Option<&str>,
     plugin_ns: &str,
     source: &str,
-) {
+) -> Result<(), String> {
     let at_lower = asset_type.to_lowercase();
     let fname = derive_create_asset_name(file_url, asset_type);
-    if let Err(e) = sqlx::query(
+    sqlx::query(
         &state.db.format_query(
             "INSERT INTO plugin_assets (user_id, asset_type, source, status, file_name, file_url, asset_id, category, content_hash, meta_fingerprint, plugin_ns) \
-             VALUES (?, ?, ?, 'approved', ?, ?, ?, '转换素材', ?, ?, ?)"
+             VALUES (?, ?, ?, 'approved', ?, ?, ?, '转换素材', ?, ?, ?) \
+             ON CONFLICT (plugin_ns, asset_id) DO NOTHING"
         )
     )
     .bind(user_id)
@@ -798,15 +812,21 @@ async fn insert_asset_record_with_source(
     .bind(plugin_ns)
     .execute(&state.db.pool)
     .await
-    {
-        tracing::warn!(
-            "[AssetConvert] 写入 plugin_assets 失败(将导致无法复用缓存): {} | URL={} 素材ID={} 命名空间={} 来源={}",
-            e,
-            file_url,
-            asset_id,
-            plugin_ns,
-            source
-        );
+    .map_err(|e| format!("写入 plugin_assets 失败: {e}"))?;
+
+    let owner: Option<String> =
+        sqlx::query_scalar(&state.db.format_query(
+            "SELECT user_id FROM plugin_assets WHERE asset_id = ? AND plugin_ns = ?",
+        ))
+        .bind(asset_id)
+        .bind(plugin_ns)
+        .fetch_optional(&state.db.pool)
+        .await
+        .map_err(|e| format!("查询 plugin_assets 归属失败: {e}"))?;
+    match owner.as_deref() {
+        Some(owner) if owner == user_id => Ok(()),
+        Some(_) => Err(format!("素材 {asset_id} 已属于同一上游下的其他用户")),
+        None => Err("素材归属写入后未查询到记录".to_string()),
     }
 }
 
@@ -1320,6 +1340,7 @@ async fn convert_url_via_upstream(
     let meta_fp = fetch_meta_fingerprint(ctx.http, url).await;
     if let Some(aid) = lookup_cached_converted_asset(
         state,
+        ctx.user_id,
         url,
         ctx.plugin_name,
         uac::LOG_SOURCE,
@@ -1344,7 +1365,7 @@ async fn convert_url_via_upstream(
         ctx.plugin_name,
         uac::LOG_SOURCE,
     )
-    .await;
+    .await?;
 
     Ok((asset_id, false))
 }

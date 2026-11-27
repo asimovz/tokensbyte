@@ -3505,6 +3505,55 @@ macro_rules! pg_migration_blocks {
         "COMMENT ON COLUMN user_model_discount_schedules.status IS 'pending 待生效 / applied 已生效 / cancelled 已取消（取消不物理删，留审计）'"
     );
 
+    // 素材 ID 只在上游命名空间内唯一：循环上游可在不同绑定下返回相同 ID。
+    once_migration!(pool, "plugin_asset_namespace_unique_v1",
+        r#"DO $cleanup$
+        DECLARE r RECORD;
+        BEGIN
+          FOR r IN
+            SELECT c.relname AS idxname
+            FROM pg_index i
+            JOIN pg_class c ON c.oid = i.indexrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND NOT i.indisvalid
+              AND c.relname IN ('uq_plugin_assets_asset_id_ns', 'uq_plugin_asset_groups_group_id_ns')
+          LOOP
+            EXECUTE format('DROP INDEX IF EXISTS %I', r.idxname);
+          END LOOP;
+        END
+        $cleanup$"#,
+        "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uq_plugin_assets_asset_id_ns ON plugin_assets (plugin_ns, asset_id)",
+        "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uq_plugin_asset_groups_group_id_ns ON plugin_asset_groups (plugin_ns, group_id)",
+        "ALTER TABLE plugin_asset_groups DROP CONSTRAINT IF EXISTS plugin_asset_groups_group_id_key"
+    );
+
+    let valid_namespace_indexes: i64 = sqlx::query_scalar(
+        "SELECT COUNT(DISTINCT c.relname) \
+         FROM pg_index i \
+         JOIN pg_class c ON c.oid = i.indexrelid \
+         JOIN pg_class t ON t.oid = i.indrelid \
+         JOIN pg_namespace n ON n.oid = t.relnamespace \
+         WHERE n.nspname = 'public' AND i.indisvalid \
+           AND ((t.relname = 'plugin_assets' AND c.relname = 'uq_plugin_assets_asset_id_ns') \
+             OR (t.relname = 'plugin_asset_groups' AND c.relname = 'uq_plugin_asset_groups_group_id_ns'))"
+    )
+    .fetch_one(pool)
+    .await?;
+    let legacy_group_constraint: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pg_constraint \
+         WHERE conrelid = 'public.plugin_asset_groups'::regclass \
+           AND conname = 'plugin_asset_groups_group_id_key'"
+    )
+    .fetch_one(pool)
+    .await?;
+    if valid_namespace_indexes != 2 || legacy_group_constraint != 0 {
+        anyhow::bail!(
+            "素材命名空间唯一索引未就绪（有效索引 {}/2，旧全局约束 {}），请处理重复数据或 INVALID 索引后重启",
+            valid_namespace_indexes,
+            legacy_group_constraint
+        );
+    }
+
     tracing::info!("PostgreSQL AnyPool migrations completed successfully");
     Ok(())
     }};
