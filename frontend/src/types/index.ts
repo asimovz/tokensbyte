@@ -647,6 +647,19 @@ export interface AllSettings {
   };
 }
 
+export interface BoundChannelSummary {
+  id: number;
+  name: string;
+  group_aid?: string | null;
+  is_ha?: boolean;
+  status?: number;
+  effective_priority?: number;
+  effective_weight?: number;
+  custom_priority?: number | null;
+  custom_weight?: number | null;
+  has_custom_schedule?: boolean;
+}
+
 export interface ChannelConfig {
   id: number;
   name: string;
@@ -690,6 +703,8 @@ export interface ChannelConfig {
   /** 同步时叠加到分组倍率的增量 */
   upstream_sync_rate_add?: number;
   upstream_synced_at?: string | null;
+  bound_channel_count?: number;
+  bound_channels?: BoundChannelSummary[];
   created_at: string;
   updated_at: string;
 }

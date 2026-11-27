@@ -209,6 +209,20 @@ pub struct ChannelConfigListResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct BoundChannelSummary {
+    pub id: i64,
+    pub name: String,
+    pub group_aid: Option<String>,
+    pub is_ha: bool,
+    pub status: i32,
+    pub effective_priority: i32,
+    pub effective_weight: i32,
+    pub custom_priority: Option<i32>,
+    pub custom_weight: Option<i32>,
+    pub has_custom_schedule: bool,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ChannelConfigSafe {
     pub id: i64,
     pub name: String,
@@ -245,6 +259,8 @@ pub struct ChannelConfigSafe {
     pub upstream_sync_interval_minutes: i32,
     pub upstream_sync_rate_add: f64,
     pub upstream_synced_at: Option<String>,
+    pub bound_channel_count: i64,
+    pub bound_channels: Vec<BoundChannelSummary>,
 }
 
 impl ChannelConfigSafe {
@@ -293,6 +309,8 @@ impl ChannelConfigSafe {
             upstream_sync_interval_minutes: c.upstream_sync_interval_minutes,
             upstream_sync_rate_add: c.upstream_sync_rate_add,
             upstream_synced_at: c.upstream_synced_at.map(|t| t.into_string()),
+            bound_channel_count: 0,
+            bound_channels: Vec::new(),
         }
     }
 }

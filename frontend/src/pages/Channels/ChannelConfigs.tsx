@@ -6,7 +6,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { Table, Button, Space, Tag, Modal, Form, Input, InputNumber, Switch, Segmented, message, Popconfirm, Card, Typography, AutoComplete, Grid, Tooltip, Progress, Select, Divider, TimePicker } from 'antd';
+import { Table, Button, Space, Tag, Modal, Form, Input, InputNumber, Switch, Segmented, message, Popconfirm, Card, Typography, AutoComplete, Grid, Tooltip, Progress, Select, Divider, TimePicker, Popover } from 'antd';
 import MobileCardList, { MobileCard, CardRow, CardActions } from '../../components/MobileCardList';
 import { PlusOutlined, EditOutlined, DeleteOutlined, SyncOutlined, ClearOutlined, StopOutlined, PlayCircleOutlined, SettingOutlined } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
@@ -528,6 +528,68 @@ const ChannelConfigs: React.FC = () => {
     return true;
   });
 
+  const renderBoundChannelsCell = (record: ChannelConfig) => {
+    const count = record.bound_channel_count ?? record.bound_channels?.length ?? 0;
+    if (count === 0) return <Text type="secondary" style={{ fontSize: 12 }}>未绑定</Text>;
+    const channels = record.bound_channels || [];
+    return (
+      <Popover
+        placement="bottom"
+        trigger={['hover', 'click']}
+        title={<div style={{ fontSize: 12, fontWeight: 600 }}>已绑定的模型渠道分组 ({count})</div>}
+        content={
+          <div style={{ maxHeight: 240, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6, minWidth: 260, maxWidth: 360 }}>
+            {channels.map(ch => (
+              <div key={ch.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '5px 8px', borderRadius: 6, background: isLight ? '#f4f4f5' : 'rgba(255,255,255,0.06)', border: isLight ? '1px solid #e4e4e7' : '1px solid rgba(255,255,255,0.08)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: 1 }}>
+                  <span title={ch.name} style={{ fontSize: 12, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: ch.status === 0 ? 'var(--text-secondary, #8c8c8c)' : undefined }}>{ch.name}</span>
+                  {ch.status === 0 && <Tag color="error" style={{ margin: 0, fontSize: 10, padding: '0 4px', lineHeight: '14px', height: 16, borderRadius: 2 }}>已禁用</Tag>}
+                  {ch.is_ha && <Tag color="purple" style={{ margin: 0, fontSize: 10, padding: '0 4px', lineHeight: '14px', height: 16, borderRadius: 2 }}>HA</Tag>}
+                  {ch.has_custom_schedule && <Tag color="blue" style={{ margin: 0, fontSize: 10, padding: '0 4px', lineHeight: '14px', height: 16, borderRadius: 2 }}>独立调度</Tag>}
+                </div>
+              </div>
+            ))}
+          </div>
+        }
+      >
+        <Tag color="processing" style={{ margin: 0, padding: '0 6px', fontSize: 11, height: 20, lineHeight: '18px', borderRadius: 4, cursor: 'pointer' }}>{count} 个分组</Tag>
+      </Popover>
+    );
+  };
+
+  const renderScheduleCell = (record: ChannelConfig) => {
+    const customChannels = (record.bound_channels || []).filter(ch => ch.has_custom_schedule);
+    return (
+      <Space size={3} wrap={false} style={{ alignItems: 'center' }}>
+        <Tooltip title="默认优先级"><Text type="secondary" style={{ fontSize: 12 }}>P{record.priority ?? 0}</Text></Tooltip>
+        <Tooltip title="默认权重"><Text type="secondary" style={{ fontSize: 12 }}>W{record.weight ?? 1}</Text></Tooltip>
+        <Tooltip title="渠道倍率"><Tag color="orange" style={{ margin: 0, padding: '0 4px', lineHeight: '16px', height: 18, fontSize: 11, borderRadius: 4 }}>{record.rate ?? 1.0}x</Tag></Tooltip>
+        {customChannels.length > 0 && (
+          <Popover
+            placement="bottom"
+            trigger={['hover', 'click']}
+            title={<div style={{ fontSize: 12, fontWeight: 600 }}>分组调度详情 ({customChannels.length}/{record.bound_channel_count ?? record.bound_channels?.length ?? 0} 自定义)</div>}
+            content={
+              <div style={{ maxHeight: 240, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6, minWidth: 280, maxWidth: 380 }}>
+                {customChannels.map(ch => (
+                  <div key={ch.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '5px 8px', borderRadius: 6, background: isLight ? 'rgba(22,119,255,0.06)' : 'rgba(22,119,255,0.14)', border: isLight ? '1px solid #91caff' : '1px solid rgba(22,119,255,0.4)' }}>
+                    <span title={ch.name} style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ch.name}</span>
+                    <Space size={4} style={{ flexShrink: 0 }}>
+                      <Tag color="blue" style={{ margin: 0, fontSize: 10, padding: '0 4px', lineHeight: '14px', height: 16, borderRadius: 3 }}>P{ch.effective_priority ?? record.priority ?? 0}</Tag>
+                      <Tag color="blue" style={{ margin: 0, fontSize: 10, padding: '0 4px', lineHeight: '14px', height: 16, borderRadius: 3 }}>W{ch.effective_weight ?? record.weight ?? 1}</Tag>
+                    </Space>
+                  </div>
+                ))}
+              </div>
+            }
+          >
+            <Tag color="blue" style={{ margin: 0, padding: '0 5px', lineHeight: '16px', height: 18, fontSize: 10, borderRadius: 4, cursor: 'pointer' }}>自定义({customChannels.length})</Tag>
+          </Popover>
+        )}
+      </Space>
+    );
+  };
+
   const columns = [
     {
       title: '配置',
@@ -578,6 +640,14 @@ const ChannelConfigs: React.FC = () => {
       },
     },
     {
+      title: '绑定分组',
+      key: 'bound_channels',
+      width: 105,
+      align: 'center' as const,
+      sorter: (a: ChannelConfig, b: ChannelConfig) => (a.bound_channel_count ?? a.bound_channels?.length ?? 0) - (b.bound_channel_count ?? b.bound_channels?.length ?? 0),
+      render: (_: unknown, record: ChannelConfig) => renderBoundChannelsCell(record),
+    },
+    {
       title: '服务商',
       dataIndex: 'provider_type',
       key: 'provider_type',
@@ -589,15 +659,9 @@ const ChannelConfigs: React.FC = () => {
     {
       title: '调度',
       key: 'schedule',
-      width: 105,
+      width: 170,
       sorter: (a: ChannelConfig, b: ChannelConfig) => (a.priority || 0) - (b.priority || 0),
-      render: (_: unknown, record: ChannelConfig) => (
-        <Space size={3} wrap={false}>
-          <Tooltip title="优先级"><Text type="secondary" style={{ fontSize: 12 }}>P{record.priority || 0}</Text></Tooltip>
-          <Tooltip title="权重"><Text type="secondary" style={{ fontSize: 12 }}>W{record.weight || 1}</Text></Tooltip>
-          <Tag color="orange" style={{ margin: 0, padding: '0 4px', lineHeight: '16px', height: 18, fontSize: 11, borderRadius: 4 }}>{record.rate ?? 1.0}x</Tag>
-        </Space>
-      ),
+      render: (_: unknown, record: ChannelConfig) => renderScheduleCell(record),
     },
     {
       title: '额度',

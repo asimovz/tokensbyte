@@ -7,8 +7,8 @@
 
 use crate::error::AppError;
 use crate::models::{
-    ChannelConfig, ChannelConfigListResponse, ChannelConfigSafe, CreateChannelConfigRequest,
-    UpdateChannelConfigRequest,
+    BoundChannelSummary, ChannelConfig, ChannelConfigListResponse, ChannelConfigSafe,
+    CreateChannelConfigRequest, UpdateChannelConfigRequest,
 };
 use crate::services::upstream_rate_sync::{
     applied_channel_rate, is_sync_due, newapi_pricing_url, parse_newapi_groups,
@@ -118,10 +118,94 @@ pub async fn list_channel_configs(
     .fetch_one(&state.db.pool)
     .await?;
 
+    let defaults: std::collections::HashMap<i64, (i32, i32)> = configs
+        .iter()
+        .map(|c| (c.id, (c.priority, c.weight)))
+        .collect();
+    let channels: Vec<(
+        i64,
+        String,
+        Option<String>,
+        Option<i64>,
+        String,
+        String,
+        i32,
+        i32,
+        i32,
+    )> = sqlx::query_as(&state.db.format_query(
+        "SELECT id, name, group_aid, preset_id, provider_type, config, status, priority, weight FROM channels",
+    ))
+    .fetch_all(&state.db.pool)
+    .await?;
+    let mut bindings: std::collections::HashMap<i64, Vec<BoundChannelSummary>> =
+        std::collections::HashMap::new();
+
+    for (id, name, group_aid, preset_id, provider_type, config, status, priority, weight) in channels {
+        if provider_type == "high_availability_group" {
+            let parsed = serde_json::from_str::<serde_json::Value>(&config).unwrap_or_default();
+            let Some(sub_ids) = parsed.get("sub_channels").and_then(|v| v.as_array()) else {
+                continue;
+            };
+            let policy = crate::relay::ha::parse_sub_channel_policy(&config);
+            let mut seen = std::collections::HashSet::new();
+            for sub_id in sub_ids.iter().filter_map(|v| v.as_i64()) {
+                if !seen.insert(sub_id) {
+                    continue;
+                }
+                let Some(&(default_priority, default_weight)) = defaults.get(&sub_id) else {
+                    continue;
+                };
+                let binding = policy.binding(sub_id);
+                let custom_priority = binding.and_then(|b| b.priority);
+                let custom_weight = binding.and_then(|b| b.weight);
+                bindings.entry(sub_id).or_default().push(BoundChannelSummary {
+                    id,
+                    name: name.clone(),
+                    group_aid: group_aid.clone(),
+                    is_ha: true,
+                    status,
+                    effective_priority: custom_priority.unwrap_or(default_priority),
+                    effective_weight: custom_weight.unwrap_or(default_weight),
+                    custom_priority,
+                    custom_weight,
+                    has_custom_schedule: custom_priority.is_some() || custom_weight.is_some(),
+                });
+            }
+        } else if let Some(preset_id) = preset_id {
+            let Some(&(default_priority, default_weight)) = defaults.get(&preset_id) else {
+                continue;
+            };
+            let custom_priority = (priority != default_priority).then_some(priority);
+            let custom_weight = (weight != default_weight).then_some(weight);
+            bindings.entry(preset_id).or_default().push(BoundChannelSummary {
+                id,
+                name,
+                group_aid,
+                is_ha: false,
+                status,
+                effective_priority: priority,
+                effective_weight: weight,
+                custom_priority,
+                custom_weight,
+                has_custom_schedule: custom_priority.is_some() || custom_weight.is_some(),
+            });
+        }
+    }
+    for bound in bindings.values_mut() {
+        bound.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
+    }
+
     Ok(Json(ChannelConfigListResponse {
         data: configs
             .into_iter()
-            .map(|c| ChannelConfigSafe::from_with_role(c, is_admin))
+            .map(|c| {
+                let mut safe = ChannelConfigSafe::from_with_role(c, is_admin);
+                if let Some(bound) = bindings.remove(&safe.id) {
+                    safe.bound_channel_count = bound.len() as i64;
+                    safe.bound_channels = bound;
+                }
+                safe
+            })
             .collect(),
         total,
     }))

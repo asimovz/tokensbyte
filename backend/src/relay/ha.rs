@@ -1159,7 +1159,7 @@ impl SubChannelPolicy {
         self.binding(config_id).and_then(|b| b.weight).unwrap_or(fallback)
     }
 
-    fn binding(&self, config_id: i64) -> Option<SubBindingPolicy> {
+    pub(crate) fn binding(&self, config_id: i64) -> Option<SubBindingPolicy> {
         self.bindings.get(&config_id.to_string()).copied()
     }
 }
