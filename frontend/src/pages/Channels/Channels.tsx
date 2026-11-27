@@ -3364,101 +3364,95 @@ const Channels: React.FC = () => {
                                           修改后即时预览；首次修改组内 P/W 时整组物化
                                         </span>
                                       </div>
-                                      {tiers.map(([pr, list], tierIdx) => {
-                                        const sum = list.reduce((s, p) => s + Math.max(0, Number(effSubWeight(p))), 0);
-                                        return (
-                                          <div key={pr} style={{ marginBottom: tierIdx === tiers.length - 1 ? 0 : 8 }}>
-                                            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>
-                                              {tierIdx === 0 ? '主用' : `备用 ${tierIdx}`}（优先级 {pr}）
-                                            </div>
-                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                                              {(list as any[]).map((p: any) => {
-                                                const w = Math.max(0, Number(effSubWeight(p)));
-                                                const pct = sum > 0 ? Math.round((w / sum) * 100) : 0;
-                                                const meltedSec = meltedSeconds[String(p.id)];
-                                                const isDisabled = (p.status ?? 1) !== 1;
-                                                const tone = meltedSec !== undefined ? 'error' : (isDisabled ? 'warning' : (tierIdx === 0 ? 'primary' : 'muted'));
-                                                const toneMap = {
-                                                  primary: { background: isLight ? 'rgba(22,119,255,0.10)' : 'rgba(22,119,255,0.22)', color: isLight ? '#1677ff' : '#69b1ff', border: isLight ? '1px solid rgba(22,119,255,0.35)' : '1px solid rgba(105,177,255,0.40)' },
-                                                  muted: { background: isLight ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.08)', color: 'var(--text)', border: isLight ? '1px solid #e5e4e7' : '1px solid rgba(255,255,255,0.12)' },
-                                                  error: { background: isLight ? 'rgba(255,77,79,0.08)' : 'rgba(255,77,79,0.18)', color: isLight ? '#cf1322' : '#ff7875', border: isLight ? '1px solid rgba(255,77,79,0.30)' : '1px solid rgba(255,120,117,0.40)' },
-                                                  warning: { background: isLight ? 'rgba(250,140,22,0.08)' : 'rgba(250,140,22,0.18)', color: isLight ? '#d46b08' : '#ffa940', border: isLight ? '1px solid rgba(250,140,22,0.30)' : '1px solid rgba(255,169,64,0.40)' },
-                                                };
-                                                const cardTone = (toneMap as any)[tone];
-                                                const prioritySource = isSubPolicyFieldSet(p.id, 'priority') ? '组内' : `全局（当前 ${p.priority ?? 0}）`;
-                                                const weightSource = isSubPolicyFieldSet(p.id, 'weight') ? '组内' : `全局（当前 ${p.weight ?? 1}）`;
-                                                return (
-                                                  <div
-                                                    key={p.id}
-                                                    data-ha-pw-card={p.id}
-                                                    style={{ flex: '1 1 220px', minWidth: 210, maxWidth: 280, padding: '8px 10px', borderRadius: 6, background: cardTone.background, border: cardTone.border }}
-                                                  >
-                                                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
-                                                      <div style={{ minWidth: 0, flex: 1 }}>
-                                                        <div title={p.name} style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</div>
-                                                        <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginTop: 2 }}>YID: {p.yid || '-'} · 倍率: {p.rate ?? 1.0}x</div>
-                                                      </div>
-                                                      <span style={{ flexShrink: 0, fontSize: 11, fontWeight: 600, color: cardTone.color }}>
-                                                        {tierIdx === 0 ? `${pct}%` : `W ${effSubWeight(p)}`}
-                                                      </span>
-                                                    </div>
-                                                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 8px', marginTop: 4, fontSize: 10, color: 'var(--text-secondary)' }}>
-                                                      {meltedSec !== undefined ? (
-                                                        <span style={{ color: cardTone.color }}>熔断中</span>
-                                                      ) : isDisabled ? (
-                                                        <span style={{ color: cardTone.color }}>已禁用</span>
-                                                      ) : (
-                                                        <span>正常</span>
-                                                      )}
-                                                      <span>P 来源：{prioritySource}</span>
-                                                      <span>W 来源：{weightSource}</span>
-                                                    </div>
-                                                    <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6 }}>
-                                                      <Tooltip title="组内优先级：留空则跟随该上游全局值">
-                                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                                                          <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>组内 P</span>
-                                                          <InputNumber
-                                                            aria-label={`组内优先级 ${p.name}`}
-                                                            size="small"
-                                                            min={0}
-                                                            max={999}
-                                                            precision={0}
-                                                            controls={false}
-                                                            style={{ width: 82 }}
-                                                            placeholder={`全局 ${p.priority ?? 0}`}
-                                                            value={subPolicyValue(p.id, 'priority')}
-                                                            onChange={(v) => setSubPolicyField(p.id, 'priority', v === null ? null : Number(v))}
-                                                          />
-                                                        </span>
-                                                      </Tooltip>
-                                                      <Tooltip title="组内权重：同档按权重比例分流；留空则跟随该上游全局值">
-                                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                                                          <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>组内 W</span>
-                                                          <InputNumber
-                                                            aria-label={`组内权重 ${p.name}`}
-                                                            size="small"
-                                                            min={0}
-                                                            max={100}
-                                                            precision={0}
-                                                            controls={false}
-                                                            style={{ width: 66 }}
-                                                            placeholder={`全局 ${p.weight ?? 1}`}
-                                                            value={subPolicyValue(p.id, 'weight')}
-                                                            onChange={(v) => setSubPolicyField(p.id, 'weight', v === null ? null : Number(v))}
-                                                          />
-                                                        </span>
-                                                      </Tooltip>
-                                                    </div>
-                                                    {w === 0 && (
-                                                      <div style={{ marginTop: 4, fontSize: 10, color: '#fa8c16' }}>W=0：不参与分流，不等于停用</div>
-                                                    )}
-                                                  </div>
-                                                );
-                                              })}
-                                            </div>
-                                          </div>
-                                        );
-                                      })}
+                                      <div style={{ overflowX: 'auto' }}>
+                                        {tiers.flatMap(([pr, list], tierIdx) => {
+                                          const sum = list.reduce((s, p) => s + Math.max(0, Number(effSubWeight(p))), 0);
+                                          return (list as any[]).map((p: any) => {
+                                            const w = Math.max(0, Number(effSubWeight(p)));
+                                            const pct = sum > 0 ? Math.round((w / sum) * 100) : 0;
+                                            const meltedSec = meltedSeconds[String(p.id)];
+                                            const isDisabled = (p.status ?? 1) !== 1;
+                                            const tone = meltedSec !== undefined ? 'error' : (isDisabled ? 'warning' : (tierIdx === 0 ? 'primary' : 'muted'));
+                                            const toneMap = {
+                                              primary: { background: isLight ? 'rgba(22,119,255,0.10)' : 'rgba(22,119,255,0.22)', color: isLight ? '#1677ff' : '#69b1ff', border: isLight ? '1px solid rgba(22,119,255,0.35)' : '1px solid rgba(105,177,255,0.40)' },
+                                              muted: { background: isLight ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.08)', color: 'var(--text)', border: isLight ? '1px solid #e5e4e7' : '1px solid rgba(255,255,255,0.12)' },
+                                              error: { background: isLight ? 'rgba(255,77,79,0.08)' : 'rgba(255,77,79,0.18)', color: isLight ? '#cf1322' : '#ff7875', border: isLight ? '1px solid rgba(255,77,79,0.30)' : '1px solid rgba(255,120,117,0.40)' },
+                                              warning: { background: isLight ? 'rgba(250,140,22,0.08)' : 'rgba(250,140,22,0.18)', color: isLight ? '#d46b08' : '#ffa940', border: isLight ? '1px solid rgba(250,140,22,0.30)' : '1px solid rgba(255,169,64,0.40)' },
+                                            };
+                                            const cardTone = (toneMap as any)[tone];
+                                            const prioritySource = isSubPolicyFieldSet(p.id, 'priority') ? '组内' : `全局（当前 ${p.priority ?? 0}）`;
+                                            const weightSource = isSubPolicyFieldSet(p.id, 'weight') ? '组内' : `全局（当前 ${p.weight ?? 1}）`;
+                                            return (
+                                              <div
+                                                key={p.id}
+                                                data-ha-pw-row
+                                                data-ha-pw-card={p.id}
+                                                style={{ display: 'grid', gridTemplateColumns: '92px minmax(160px, 1.2fr) minmax(210px, 1.4fr) 72px 256px', alignItems: 'center', gap: 10, minWidth: 830, marginBottom: 6, padding: '8px 10px', borderRadius: 6, background: cardTone.background, border: cardTone.border }}
+                                              >
+                                                <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                                                  <div style={{ fontWeight: 600, color: 'var(--text)' }}>{tierIdx === 0 ? '主用' : `备用 ${tierIdx}`}</div>
+                                                  <div>优先级 {pr}</div>
+                                                </div>
+                                                <div style={{ minWidth: 0 }}>
+                                                  <div title={p.name} style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</div>
+                                                  <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginTop: 2 }}>YID: {p.yid || '-'} · 倍率: {p.rate ?? 1.0}x</div>
+                                                </div>
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 8px', fontSize: 10, color: 'var(--text-secondary)' }}>
+                                                  {meltedSec !== undefined ? (
+                                                    <span style={{ color: cardTone.color }}>熔断中</span>
+                                                  ) : isDisabled ? (
+                                                    <span style={{ color: cardTone.color }}>已禁用</span>
+                                                  ) : (
+                                                    <span>正常</span>
+                                                  )}
+                                                  <span>P 来源：{prioritySource}</span>
+                                                  <span>W 来源：{weightSource}</span>
+                                                  {w === 0 && <span style={{ color: '#fa8c16' }}>W=0：不参与分流</span>}
+                                                </div>
+                                                <span style={{ fontSize: 11, fontWeight: 600, color: cardTone.color, textAlign: 'right' }}>
+                                                  {tierIdx === 0 ? `${pct}%` : `W ${effSubWeight(p)}`}
+                                                </span>
+                                                <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                                  <Tooltip title="组内优先级：留空则跟随该上游全局值">
+                                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                                                      <span style={{ fontSize: 11, color: 'var(--text-secondary)', whiteSpace: 'nowrap', flexShrink: 0 }}>组内 P</span>
+                                                      <InputNumber
+                                                        aria-label={`组内优先级 ${p.name}`}
+                                                        size="small"
+                                                        min={0}
+                                                        max={999}
+                                                        precision={0}
+                                                        controls={false}
+                                                        style={{ width: 82 }}
+                                                        placeholder={`全局 ${p.priority ?? 0}`}
+                                                        value={subPolicyValue(p.id, 'priority')}
+                                                        onChange={(v) => setSubPolicyField(p.id, 'priority', v === null ? null : Number(v))}
+                                                      />
+                                                    </span>
+                                                  </Tooltip>
+                                                  <Tooltip title="组内权重：同档按权重比例分流；留空则跟随该上游全局值">
+                                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                                                      <span style={{ fontSize: 11, color: 'var(--text-secondary)', whiteSpace: 'nowrap', flexShrink: 0 }}>组内 W</span>
+                                                      <InputNumber
+                                                        aria-label={`组内权重 ${p.name}`}
+                                                        size="small"
+                                                        min={0}
+                                                        max={100}
+                                                        precision={0}
+                                                        controls={false}
+                                                        style={{ width: 66 }}
+                                                        placeholder={`全局 ${p.weight ?? 1}`}
+                                                        value={subPolicyValue(p.id, 'weight')}
+                                                        onChange={(v) => setSubPolicyField(p.id, 'weight', v === null ? null : Number(v))}
+                                                      />
+                                                    </span>
+                                                  </Tooltip>
+                                                </div>
+                                              </div>
+                                            );
+                                          });
+                                        })}
+                                      </div>
                                       {topSum <= 0 && (
                                         <div style={{ marginTop: 6, fontSize: 11, color: '#ff4d4f' }}>
                                           主用档权重合计为 0：将全量走 {tiers[0][1][0].name}（绑定序第一）
